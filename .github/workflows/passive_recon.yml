@@ -2,13 +2,27 @@ name: Automated Parallel Passive Reconnaissance (Scatter-Gather Engine)
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'collect = 외부 공개 자료만 수집; bounded-probe = 최대 20개 HTTPS 루트에 HEAD 요청'
+        required: true
+        default: collect
+        type: choice
+        options:
+          - collect
+          - bounded-probe
   #schedule:
     #- cron: '17 19 * * *'
     #- cron: '17 7 * * *'
 
 permissions:
-  contents: write
+  contents: read
   actions: read 
+
+# 같은 저장소에서 수동 실행이 겹쳐 대상에 중복 요청하지 않도록 제한합니다.
+concurrency:
+  group: passive-recon-${{ github.repository }}
+  cancel-in-progress: false
 
 jobs:
   # ==========================================
@@ -87,8 +101,6 @@ jobs:
       run: |
         go install github.com/lc/gau/v2/cmd/gau@latest
         go install github.com/tomnomnom/waybackurls@latest
-        go install github.com/BishopFox/jsluice/cmd/jsluice@latest
-        go install github.com/projectdiscovery/katana/cmd/katana@latest
         pip install uro
         sudo apt-get install jq -y
         curl -sSfL --retry 5 --retry-delay 5 "https://github.com/trufflesecurity/trufflehog/releases/download/v3.82.0/trufflehog_3.82.0_linux_amd64.tar.gz" -o trufflehog.tar.gz
@@ -124,12 +136,10 @@ jobs:
           cd ..
         fi
 
-    - name: 딥 스캔 엔진 가동
+    - name: 공개 아카이브 URL 수집
       run: |
         chmod +x *.sh
         ./collect_urls.sh ${{ matrix.group }}
-        ./scan_linkfinder.sh ${{ matrix.group }}
-        ./scan_trufflehog.sh ${{ matrix.group }}
 
     - name: 결과물 암호화
       run: |
@@ -203,21 +213,20 @@ jobs:
         retention-days: 1
 
   # ==========================================
-  # [Job 5] Httpx 생존 검사 전담대 (20대 분산)
+  # [Job 5] 수동 선택 시에만 최대 20개 루트 HEAD 검사 (단일 작업)
   # ==========================================
   httpx-live-probe:
     runs-on: ubuntu-latest
     needs: global-mixer
+    if: inputs.mode == 'bounded-probe'
     strategy:
       matrix:
-        group: ["00", "01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19"]
+        group: ["00"]
       fail-fast: false
     steps:
-    - name: Httpx 및 uro 설치
-      run: |
-        go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
-        pip install uro
-        echo "$HOME/go/bin" >> $GITHUB_PATH
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with: { python-version: '3.12' }
 
     - name: 암호화된 1차 분할 탄창 다운로드
       uses: actions/download-artifact@v4
@@ -225,28 +234,16 @@ jobs:
         name: global-chunks
         path: temp_chunks
 
-    - name: 1차 분할 탄창 복호화 및 필터링
+    - name: 검증된 HTTPS 루트 목록 복호화
       run: |
         mkdir -p chunks
         gpg --decrypt --batch --passphrase "${{ secrets.ACTIONS_CRYPTO_PASSWORD }}" temp_chunks/global_chunks.tar.gz.gpg 2>/dev/null | tar -xzf - -C chunks/
-        if [ -s chunks/chunk_${{ matrix.group }}.txt ]; then
-          uro -i chunks/chunk_${{ matrix.group }}.txt -o chunks/chunk_${{ matrix.group }}.txt
-        fi
 
-    - name: 실시간 생존 여부(Httpx) 프로빙 개시
+    - name: 순차 HTTPS HEAD 검사 (응답 이상 시 중단)
       run: |
         mkdir -p strike_out
-        if [ -s chunks/chunk_${{ matrix.group }}.txt ]; then
-          TOTAL=$(wc -l < chunks/chunk_${{ matrix.group }}.txt)
-          echo "🤖 [Httpx Check] 생존 유무 전수 검사 (${{ matrix.group }}) - 총 ${TOTAL}개"
-          httpx -l chunks/chunk_${{ matrix.group }}.txt -sc -td -server -random-agent -rl 10 -t 5 -timeout 5 -retries 1 -json -silent > strike_out/httpx_results_${{ matrix.group }}.json
-          
-          jq -r 'select(.status_code == 200) | .url' strike_out/httpx_results_${{ matrix.group }}.json | sort -u > temp_live.txt
-          grep -iEv "%3c|%3e|<|>|%22|\"|%20| |\*|%2a|%27|'" temp_live.txt > strike_out/clean_live_${{ matrix.group }}.txt || true
-        else
-          touch strike_out/httpx_results_${{ matrix.group }}.json
-          touch strike_out/clean_live_${{ matrix.group }}.txt
-        fi
+        python safe_probe.py --confirm-production-probe --input chunks/chunk_00.txt --output strike_out/httpx_results_00.json
+        python -c 'import json; from pathlib import Path; p=Path("strike_out/httpx_results_00.json"); Path("strike_out/clean_live_00.txt").write_text("".join(row["url"]+"\n" for line in p.read_text().splitlines() if (row:=json.loads(line))["status_code"]==200))'
 
     - name: 생존 검사 결과 암호화
       run: |
@@ -266,6 +263,7 @@ jobs:
   live-url-mixer:
     runs-on: ubuntu-latest
     needs: httpx-live-probe
+    if: ${{ false }} # 브라우저 자동 촬영 경로를 비활성화합니다.
     steps:
     - name: 모든 노드의 생존 검사 결과 다운로드
       uses: actions/download-artifact@v4
@@ -306,6 +304,7 @@ jobs:
   screenshot-strike:
     runs-on: ubuntu-latest
     needs: live-url-mixer
+    if: ${{ false }} # JS 실행/하위 리소스 요청은 총량을 보장할 수 없습니다.
     strategy:
       matrix:
         group: ["00", "01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19"]
@@ -390,6 +389,7 @@ jobs:
   excel-reporter:
     runs-on: ubuntu-latest
     needs: [recon-node, httpx-live-probe, screenshot-strike]
+    if: ${{ always() && needs.recon-node.result == 'success' && (needs.httpx-live-probe.result == 'success' || needs.httpx-live-probe.result == 'skipped') }}
     steps:
     - name: 저장소 체크아웃
       uses: actions/checkout@v4
@@ -409,10 +409,12 @@ jobs:
       with: { pattern: node-results-*, path: encrypted_storage, merge-multiple: true }
 
     - name: 2. Httpx 로그(Job 5) 다운로드 (갤러리 매핑용)
+      if: inputs.mode == 'bounded-probe'
       uses: actions/download-artifact@v4
       with: { pattern: httpx-results-*, path: encrypted_storage, merge-multiple: true }
 
     - name: 3. 스크린샷 데이터(Job 7) 다운로드
+      if: ${{ false }}
       uses: actions/download-artifact@v4
       with: { pattern: strike-results-*, path: encrypted_storage, merge-multiple: true }
 
