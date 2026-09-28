@@ -8,12 +8,13 @@ from unittest.mock import Mock, patch
 
 import global_mixer
 import js_assets
+import safe_probe
 import txt_to_excel
 from openpyxl import load_workbook
 
 
 class ReconRegressionTests(unittest.TestCase):
-    def test_katana_and_more_than_five_urls_survive(self):
+    def test_archived_api_urls_never_enter_production_probe(self):
         original = Path.cwd()
         with tempfile.TemporaryDirectory() as tmp:
             os.chdir(tmp)
@@ -26,7 +27,7 @@ class ReconRegressionTests(unittest.TestCase):
                 actual = set()
                 for path in Path("chunks").glob("chunk_*.txt"):
                     actual.update(path.read_text().splitlines())
-                self.assertEqual(actual, set(urls))
+                self.assertEqual(actual, {"https://example.test/"})
             finally:
                 os.chdir(original)
 
@@ -43,10 +44,37 @@ class ReconRegressionTests(unittest.TestCase):
                                    [("https://example.test/old",), ("https://outside.test/private",)])
                 global_mixer.run_mixer()
                 actual = "\n".join(path.read_text() for path in Path("chunks").glob("chunk_*.txt"))
-                self.assertIn("https://example.test/old", actual)
+                self.assertIn("https://example.test/", actual)
                 self.assertNotIn("outside.test", actual)
             finally:
                 os.chdir(original)
+
+    def test_probe_rejects_paths_and_stops_on_server_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp, "roots.txt")
+            output = Path(tmp, "results.json")
+            opener = Mock()
+            response = Mock(status=503)
+            response.__enter__ = Mock(return_value=response)
+            response.__exit__ = Mock(return_value=False)
+            opener.open.return_value = response
+            source.write_text("https://a.example.test/\nhttps://b.example.test/\n")
+            safe_probe.probe(source, output, opener=opener, pause=lambda seconds: None)
+            self.assertEqual(opener.open.call_count, 1)
+            self.assertEqual(opener.open.call_args.args[0].get_method(), "HEAD")
+            self.assertEqual(json.loads(output.read_text().strip())["status_code"], 503)
+            source.write_text("https://a.example.test/api/delete?id=1\n")
+            with self.assertRaises(ValueError):
+                safe_probe.probe(source, output, opener=opener)
+            self.assertEqual(opener.open.call_count, 1)
+
+    def test_probe_hard_cap_and_redirect_blocked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp, "roots.txt")
+            source.write_text("".join(f"https://h{i}.example.test/\n" for i in range(21)))
+            with self.assertRaises(ValueError):
+                safe_probe.probe(source, Path(tmp, "out.json"), opener=Mock())
+        self.assertIsNone(safe_probe.NoRedirect().redirect_request(None, None, 302, "", {}, "https://outside.test/"))
 
     def test_js_names_include_url_and_content_hash(self):
         body = b"console.log('v1')"
