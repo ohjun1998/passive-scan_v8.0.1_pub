@@ -4,13 +4,18 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'collect = 외부 공개 자료만 수집; bounded-probe = 최대 20개 HTTPS 루트에 HEAD 요청'
+        description: 'full = 전체 URL 병렬 검사; collect = 공개 자료만; bounded-probe = 20개 HTTPS 루트 HEAD'
         required: true
-        default: collect
+        default: full
         type: choice
         options:
+          - full
           - collect
           - bounded-probe
+      screenshots:
+        description: '전체 검사 후 브라우저 캡처 실행 (페이지 스크립트와 추가 요청 발생)'
+        type: boolean
+        default: false
   #schedule:
     #- cron: '17 19 * * *'
     #- cron: '17 7 * * *'
@@ -97,16 +102,21 @@ jobs:
     - name: Go 환경 세팅
       uses: actions/setup-go@v5
       with: { go-version: 'stable' }
-    - name: 수집 도구 풀세트 설치
+    - name: 공개 아카이브 수집 도구 설치
       run: |
         go install github.com/lc/gau/v2/cmd/gau@latest
         go install github.com/tomnomnom/waybackurls@latest
         pip install uro
+        echo "$HOME/go/bin" >> $GITHUB_PATH
+    - name: 전체 검사 분석 도구 설치
+      if: inputs.mode == 'full'
+      run: |
+        go install github.com/BishopFox/jsluice/cmd/jsluice@latest
+        go install github.com/projectdiscovery/katana/cmd/katana@latest
         sudo apt-get install jq -y
         curl -sSfL --retry 5 --retry-delay 5 "https://github.com/trufflesecurity/trufflehog/releases/download/v3.82.0/trufflehog_3.82.0_linux_amd64.tar.gz" -o trufflehog.tar.gz
         tar -xzf trufflehog.tar.gz trufflehog 2>/dev/null || tar -xzf trufflehog.tar.gz
         sudo mv trufflehog /usr/local/bin/
-        echo "$HOME/go/bin" >> $GITHUB_PATH
 
     - name: 균등 분배된 타겟 다운로드 및 세팅
       uses: actions/download-artifact@v4
@@ -136,10 +146,16 @@ jobs:
           cd ..
         fi
 
-    - name: 공개 아카이브 URL 수집
+    - name: URL 수집 및 선택한 모드에 따른 분석
+      env:
+        SCAN_MODE: ${{ inputs.mode }}
       run: |
         chmod +x *.sh
         ./collect_urls.sh ${{ matrix.group }}
+        if [ "$SCAN_MODE" = "full" ]; then
+          ./scan_linkfinder.sh ${{ matrix.group }}
+          ./scan_trufflehog.sh ${{ matrix.group }}
+        fi
 
     - name: 결과물 암호화
       run: |
@@ -198,6 +214,8 @@ jobs:
         done
 
     - name: 1차 셔플 엔진 가동 (모든 추출 URL 섞기)
+      env:
+        SCAN_MODE: ${{ inputs.mode }}
       run: python global_mixer.py
 
     - name: 20분할 탄창 암호화
@@ -213,20 +231,27 @@ jobs:
         retention-days: 1
 
   # ==========================================
-  # [Job 5] 수동 선택 시에만 최대 20개 루트 HEAD 검사 (단일 작업)
+  # [Job 5] 전체 모드 20개 병렬 HTTP 검사 / 선택형 루트 HEAD 검사
   # ==========================================
   httpx-live-probe:
     runs-on: ubuntu-latest
     needs: global-mixer
-    if: inputs.mode == 'bounded-probe'
+    if: inputs.mode != 'collect'
     strategy:
       matrix:
-        group: ["00"]
+        group: ${{ fromJSON(inputs.mode == 'full' && '["00","01","02","03","04","05","06","07","08","09","10","11","12","13","14","15","16","17","18","19"]' || '["00"]') }}
       fail-fast: false
     steps:
     - uses: actions/checkout@v4
     - uses: actions/setup-python@v5
       with: { python-version: '3.12' }
+    - name: 전체 URL 검사 도구 설치
+      if: inputs.mode == 'full'
+      run: |
+        go install github.com/projectdiscovery/httpx/cmd/httpx@latest
+        pip install uro
+        sudo apt-get install jq -y
+        echo "$HOME/go/bin" >> $GITHUB_PATH
 
     - name: 암호화된 1차 분할 탄창 다운로드
       uses: actions/download-artifact@v4
@@ -239,7 +264,18 @@ jobs:
         mkdir -p chunks
         gpg --decrypt --batch --passphrase "${{ secrets.ACTIONS_CRYPTO_PASSWORD }}" temp_chunks/global_chunks.tar.gz.gpg 2>/dev/null | tar -xzf - -C chunks/
 
-    - name: 순차 HTTPS HEAD 검사 (응답 이상 시 중단)
+    - name: 전체 URL 병렬 검사 (기존 작업당 초당 10회)
+      if: inputs.mode == 'full'
+      run: |
+        mkdir -p strike_out
+        if [ -s chunks/chunk_${{ matrix.group }}.txt ]; then
+          httpx -l chunks/chunk_${{ matrix.group }}.txt -sc -td -server -random-agent -rl 10 -t 5 -timeout 5 -retries 1 -json -silent > strike_out/httpx_results_${{ matrix.group }}.json
+          jq -r 'select(.status_code == 200) | .url' strike_out/httpx_results_${{ matrix.group }}.json | sort -u > strike_out/clean_live_${{ matrix.group }}.txt
+        else
+          touch strike_out/httpx_results_${{ matrix.group }}.json strike_out/clean_live_${{ matrix.group }}.txt
+        fi
+    - name: 제한형 HTTPS HEAD 검사
+      if: inputs.mode == 'bounded-probe'
       run: |
         mkdir -p strike_out
         python safe_probe.py --confirm-production-probe --input chunks/chunk_00.txt --output strike_out/httpx_results_00.json
@@ -263,7 +299,7 @@ jobs:
   live-url-mixer:
     runs-on: ubuntu-latest
     needs: httpx-live-probe
-    if: ${{ false }} # 브라우저 자동 촬영 경로를 비활성화합니다.
+    if: inputs.mode == 'full' && inputs.screenshots
     steps:
     - name: 모든 노드의 생존 검사 결과 다운로드
       uses: actions/download-artifact@v4
@@ -304,7 +340,7 @@ jobs:
   screenshot-strike:
     runs-on: ubuntu-latest
     needs: live-url-mixer
-    if: ${{ false }} # JS 실행/하위 리소스 요청은 총량을 보장할 수 없습니다.
+    if: inputs.mode == 'full' && inputs.screenshots
     strategy:
       matrix:
         group: ["00", "01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19"]
@@ -354,9 +390,9 @@ jobs:
           
           if [ "$MISSING_COUNT" -gt 0 ]; then
             echo "⚠️ 누락된 $MISSING_COUNT 개 타겟에 대해 [2단계] 정밀 단발 사격 개시..."
-            cat missing_urls.txt | xargs -n 1 -P 3 -I {} sh -c '
-              timeout 25s gowitness scan single -u "{}" --timeout 15 --delay 3 >> gowitness_fallback_${{ matrix.group }}.log 2>&1 || true
-            '
+            while IFS= read -r url; do
+              timeout 25s gowitness scan single -u "$url" --timeout 15 --delay 3 >> gowitness_fallback_${{ matrix.group }}.log 2>&1 || true
+            done < missing_urls.txt
             cat gowitness_fallback_${{ matrix.group }}.log >> gowitness_console_${{ matrix.group }}.log 2>/dev/null || true
           fi
           
@@ -409,12 +445,12 @@ jobs:
       with: { pattern: node-results-*, path: encrypted_storage, merge-multiple: true }
 
     - name: 2. Httpx 로그(Job 5) 다운로드 (갤러리 매핑용)
-      if: inputs.mode == 'bounded-probe'
+      if: inputs.mode != 'collect'
       uses: actions/download-artifact@v4
       with: { pattern: httpx-results-*, path: encrypted_storage, merge-multiple: true }
 
     - name: 3. 스크린샷 데이터(Job 7) 다운로드
-      if: ${{ false }}
+      if: inputs.mode == 'full' && inputs.screenshots
       uses: actions/download-artifact@v4
       with: { pattern: strike-results-*, path: encrypted_storage, merge-multiple: true }
 
