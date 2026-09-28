@@ -160,6 +160,20 @@ jobs:
     - name: 타겟 도메인 리스트 생성
       run: echo "${{ secrets.TARGET_DOMAINS }}" > targets.txt
 
+    - name: 이전 리포트의 URL 이력 복원
+      uses: dawidd6/action-download-artifact@v3
+      continue-on-error: true
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        workflow: passive_recon.yml
+        name: passive-recon-master-report-secured
+        path: previous_report/
+    - name: 이전 데이터베이스 압축 해제
+      run: |
+        if [ -f previous_report/passive_recon_report_secured.zip ]; then
+          (cd previous_report && unzip -P "${{ secrets.ACTIONS_CRYPTO_PASSWORD }}" passive_recon_report_secured.zip recon_history.db) || true
+        fi
+
     - name: 모든 파편 데이터 다운로드
       uses: actions/download-artifact@v4
       with:
