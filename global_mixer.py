@@ -2,7 +2,6 @@
 import os
 import glob
 import re
-import random
 import posixpath
 import sqlite3
 from urllib.parse import urlparse, parse_qsl
@@ -115,22 +114,24 @@ def run_mixer():
         # Preserve every original URL. Grouping for display must not discard probes.
         valid_targets.append(u)
 
-    random.shuffle(valid_targets)
-    print(f"[+] 노이즈 완전 제거 및 글로벌 셔플 완료! 최종 점검 대상(과거+오늘): 총 {len(valid_targets)} 개")
-
+    # Report storage keeps all discovered URLs. Only bare HTTPS roots can be
+    # passed to the optional, globally bounded HEAD probe.
+    hosts = {urlparse(u).hostname for u in valid_targets}
+    for path in glob.glob('results/*_all_targets.txt'):
+        for line in open(path, encoding='utf-8', errors='ignore'):
+            hosts.add(line.strip().lower())
+    roots = sorted(
+        f'https://{host}/' for host in hosts if host and
+        re.fullmatch(r'[a-z0-9][a-z0-9.-]*[a-z0-9]', host) and
+        any(host == target[2:] or host.endswith('.' + target[2:])
+            if target.startswith('*.') else host == target for target in targets)
+    )
+    # Fixed ceiling: a workflow input cannot raise it accidentally.
+    selected = roots[:20]
     os.makedirs('chunks', exist_ok=True)
-    num_chunks = 20
-    
-    if len(valid_targets) == 0:
-        for i in range(num_chunks): open(f'chunks/chunk_{i:02d}.txt', 'w').close()
-        return
-
-    chunk_size = (len(valid_targets) + num_chunks - 1) // num_chunks
-    for i in range(num_chunks):
-        chunk_data = valid_targets[i*chunk_size : (i+1)*chunk_size]
-        with open(f'chunks/chunk_{i:02d}.txt', 'w') as f:
-            for url in chunk_data: f.write(url + '\n')
-        print(f"  -> 노드 {i:02d} 배정 완료: {len(chunk_data)} 개의 타겟 할당")
+    with open('chunks/chunk_00.txt', 'w') as f:
+        f.writelines(url + '\n' for url in selected)
+    print(f"[+] URL {len(valid_targets)}개 기록, HEAD 후보 {len(selected)}개 / 전체 {len(roots)}개 호스트")
 
 if __name__ == '__main__':
     run_mixer()

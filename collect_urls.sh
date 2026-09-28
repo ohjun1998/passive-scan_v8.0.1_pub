@@ -45,34 +45,22 @@ for TARGET_FILE in results/*_all_targets.txt; do
   ) &
 
   # ---------------------------------------------------------
-  # 4. Katana (스텔스 크롤링 - 확장된 타겟 리스트 활용)
+  # 대상 서버에 직접 접근하는 크롤링은 운영 안전 정책에 따라 중지합니다.
+  # 아카이브 제공자에서만 URL을 수집합니다.
   # ---------------------------------------------------------
-  (
-    echo "  [+] 🕷️ [Katana] 스텔스 크롤링 중..."
-    katana -list "$TARGET_FILE" -d 2 -c 5 -rl 50 -jc -silent | uro > "results/${SAFE_DOMAIN}_katana_${GROUP}.txt" 2>/dev/null || true
-  ) &
-
-  # ---------------------------------------------------------
-  # ⚡ 3개의 스캐너가 모두 끝날 때까지 대기
+  # 두 외부 아카이브 수집기의 종료를 기다립니다.
   # ---------------------------------------------------------
   wait
   echo "  [*] ✅ 해당 서브도메인 묶음의 딥 스캔 완료!"
 
   # ---------------------------------------------------------
-  # 5. JS 파일 추출 및 스마트 다운로드 (방어 로직 강화)
+  # 5. JS URL 목록만 저장합니다. 실제 JS 파일은 다운로드하지 않습니다.
   # ---------------------------------------------------------
   echo "  [+] ⚙️ 수집된 전체 데이터에서 JavaScript(JS) 타겟 추출 중..."
   cat "results/${SAFE_DOMAIN}_"*"_${GROUP}.txt" 2>/dev/null | grep -iE '\.m?js($|\?)' | sort -u > "results/${SAFE_DOMAIN}_js_targets.txt" || true
   JS_TOTAL=$(wc -l < "results/${SAFE_DOMAIN}_js_targets.txt" 2>/dev/null || echo 0)
 
-  if [ "$JS_TOTAL" -gt 0 ]; then
-    echo "  [+] 💡 총 ${JS_TOTAL}개의 자바스크립트(JS) 소스 경로를 식별했습니다."
-
-    echo "  [+] 📥 JS 다운로드: URL과 콘텐츠 해시로 파일명을 분리합니다."
-    python3 js_assets.py "results/${SAFE_DOMAIN}_js_targets.txt" "results/${SAFE_DOMAIN}_js_files_${GROUP}" "results/${SAFE_DOMAIN}_js_mapping_${GROUP}.txt" || true
-  else
-    echo "  [-] 💡 식별된 JS 소스 경로가 없습니다."
-  fi
+  echo "  [+] JS URL ${JS_TOTAL}개 기록 완료 (직접 다운로드 없음)."
 
 done
 

@@ -217,14 +217,12 @@ async def fetch_subdomain_status(session, subdomain):
 
 async def analyze_subdomain(session, subdomain):
     wb_task = asyncio.create_task(fetch_wayback_first_seen(session, subdomain))
-    status_task = asyncio.create_task(fetch_subdomain_status(session, subdomain))
     wb_date = await wb_task
-    status = await status_task
-    return subdomain, wb_date, status
+    return subdomain, wb_date, "NotProbed"
 
 async def analyze_all_subdomains(subdomains):
     results = {}
-    connector = aiohttp.TCPConnector(ssl=False, limit=50)
+    connector = aiohttp.TCPConnector(limit=20)
     async with aiohttp.ClientSession(connector=connector) as session:
         tasks = []
         for sub in subdomains:
@@ -679,7 +677,7 @@ def build_advanced_excel_report():
 
     subdomain_analysis_results = {}
     if global_current_subdomains:
-        print(f"[*] 서브도메인 실시간 응답 상태 및 Wayback 연혁 분석 가동 (총 {len(global_current_subdomains)}개)...", flush=True)
+        print(f"[*] Wayback 연혁 분석 가동 (대상 서버 상태 확인 생략, 총 {len(global_current_subdomains)}개)...", flush=True)
         subdomain_analysis_results = asyncio.run(analyze_all_subdomains(list(global_current_subdomains)))
 
     # =========================================================================
@@ -752,7 +750,7 @@ def build_advanced_excel_report():
         sorted_subs = sorted(list(global_current_subdomains), key=lambda x: (x not in global_new_subdomains, x))
         for sub in sorted_subs:
             is_new_mark = "🌟 신규" if sub in global_new_subdomains else "-"
-            analysis = subdomain_analysis_results.get(sub, {"wayback": "기록 없음", "status": "Dead"})
+            analysis = subdomain_analysis_results.get(sub, {"wayback": "기록 없음", "status": "NotProbed"})
             first_seen, status = analysis["wayback"], analysis["status"]
             ws_subs.append([sub_idx - 1, status, escape_formula(sub), first_seen, is_new_mark])
             for c in range(1, 6):
