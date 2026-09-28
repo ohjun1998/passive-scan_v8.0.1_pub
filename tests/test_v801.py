@@ -14,7 +14,7 @@ from openpyxl import load_workbook
 
 
 class ReconRegressionTests(unittest.TestCase):
-    def test_archived_api_urls_never_enter_production_probe(self):
+    def test_full_mode_checks_every_archived_api_url_on_one_worker(self):
         original = Path.cwd()
         with tempfile.TemporaryDirectory() as tmp:
             os.chdir(tmp)
@@ -27,7 +27,8 @@ class ReconRegressionTests(unittest.TestCase):
                 actual = set()
                 for path in Path("chunks").glob("chunk_*.txt"):
                     actual.update(path.read_text().splitlines())
-                self.assertEqual(actual, {"https://example.test/"})
+                self.assertEqual(actual, set(urls))
+                self.assertEqual(sum(bool(p.read_text()) for p in Path('chunks').glob('chunk_*.txt')), 1)
             finally:
                 os.chdir(original)
 
@@ -42,10 +43,29 @@ class ReconRegressionTests(unittest.TestCase):
                     db.execute("CREATE TABLE master_urls(url TEXT)")
                     db.executemany("INSERT INTO master_urls VALUES(?)",
                                    [("https://example.test/old",), ("https://outside.test/private",)])
-                global_mixer.run_mixer()
+                with patch.dict(os.environ, {"SCAN_MODE": "bounded-probe"}):
+                    global_mixer.run_mixer()
                 actual = "\n".join(path.read_text() for path in Path("chunks").glob("chunk_*.txt"))
                 self.assertIn("https://example.test/", actual)
                 self.assertNotIn("outside.test", actual)
+            finally:
+                os.chdir(original)
+
+    def test_full_mode_keeps_one_host_on_one_worker(self):
+        original = Path.cwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            os.chdir(tmp)
+            try:
+                Path('targets.txt').write_text('*.example.test\n')
+                Path('results').mkdir()
+                urls = [f'https://api.example.test/item/{i}' for i in range(25)]
+                urls += [f'https://www.example.test/page/{i}' for i in range(8)]
+                Path('results/wild_example.test_gau_00.txt').write_text('\n'.join(urls))
+                global_mixer.run_mixer()
+                chunks = [p.read_text().splitlines() for p in Path('chunks').glob('chunk_*.txt')]
+                self.assertEqual(set(sum(chunks, [])), set(urls))
+                self.assertEqual(sum(any('api.example.test' in url for url in chunk) for chunk in chunks), 1)
+                self.assertEqual(sum(any('www.example.test' in url for url in chunk) for chunk in chunks), 1)
             finally:
                 os.chdir(original)
 
