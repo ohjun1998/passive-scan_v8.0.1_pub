@@ -2,6 +2,7 @@
 
 # $1 인자가 없으면 기본값(00) 할당
 GROUP=${1:-"00"}
+SCAN_MODE=${SCAN_MODE:-"full"}
 TARGETS_FILE="targets.txt"
 
 if [ ! -f "$TARGETS_FILE" ]; then
@@ -45,22 +46,31 @@ for TARGET_FILE in results/*_all_targets.txt; do
   ) &
 
   # ---------------------------------------------------------
-  # 대상 서버에 직접 접근하는 크롤링은 운영 안전 정책에 따라 중지합니다.
-  # 아카이브 제공자에서만 URL을 수집합니다.
+  # 전체 검사 모드에서 원래 속도로 크롤링합니다.
   # ---------------------------------------------------------
-  # 두 외부 아카이브 수집기의 종료를 기다립니다.
+  if [ "$SCAN_MODE" = "full" ]; then
+    (
+      echo "  [+] [Katana] 크롤링 중..."
+      katana -list "$TARGET_FILE" -d 2 -c 5 -rl 50 -jc -silent | uro > "results/${SAFE_DOMAIN}_katana_${GROUP}.txt" 2>/dev/null || true
+    ) &
+  fi
+
+  # 병렬 수집기가 끝날 때까지 대기합니다.
   # ---------------------------------------------------------
   wait
   echo "  [*] ✅ 해당 서브도메인 묶음의 딥 스캔 완료!"
 
   # ---------------------------------------------------------
-  # 5. JS URL 목록만 저장합니다. 실제 JS 파일은 다운로드하지 않습니다.
+  # 5. JS URL 목록을 만들고 전체 검사일 때 분석용 파일을 내려받습니다.
   # ---------------------------------------------------------
   echo "  [+] ⚙️ 수집된 전체 데이터에서 JavaScript(JS) 타겟 추출 중..."
   cat "results/${SAFE_DOMAIN}_"*"_${GROUP}.txt" 2>/dev/null | grep -iE '\.m?js($|\?)' | sort -u > "results/${SAFE_DOMAIN}_js_targets.txt" || true
   JS_TOTAL=$(wc -l < "results/${SAFE_DOMAIN}_js_targets.txt" 2>/dev/null || echo 0)
 
-  echo "  [+] JS URL ${JS_TOTAL}개 기록 완료 (직접 다운로드 없음)."
+  echo "  [+] JS URL ${JS_TOTAL}개 기록 완료."
+  if [ "$SCAN_MODE" = "full" ] && [ "$JS_TOTAL" -gt 0 ]; then
+    python3 js_assets.py "results/${SAFE_DOMAIN}_js_targets.txt" "results/${SAFE_DOMAIN}_js_files_${GROUP}" "results/${SAFE_DOMAIN}_js_mapping_${GROUP}.txt" || true
+  fi
 
 done
 

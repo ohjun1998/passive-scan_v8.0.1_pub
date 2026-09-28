@@ -2,6 +2,7 @@
 import os
 import glob
 import re
+from collections import Counter
 import posixpath
 import sqlite3
 from urllib.parse import urlparse, parse_qsl
@@ -114,8 +115,28 @@ def run_mixer():
         # Preserve every original URL. Grouping for display must not discard probes.
         valid_targets.append(u)
 
-    # Report storage keeps all discovered URLs. Only bare HTTPS roots can be
-    # passed to the optional, globally bounded HEAD probe.
+    os.makedirs('chunks', exist_ok=True)
+    mode = os.environ.get('SCAN_MODE', 'full')
+    if mode == 'full':
+        # Keep every eligible URL. A hostname belongs to exactly one worker,
+        # so 20 workers do not each consume a separate 10 req/s budget there.
+        counts = Counter(urlparse(u).hostname for u in valid_targets)
+        by_host = {}
+        sizes = [0] * 20
+        for host, size in sorted(counts.items(), key=lambda pair: (-pair[1], pair[0])):
+            index = min(range(20), key=lambda i: (sizes[i], i))
+            by_host[host] = index
+            sizes[index] += size
+        chunks = [[] for _ in range(20)]
+        for url in sorted(valid_targets):
+            chunks[by_host[urlparse(url).hostname]].append(url)
+        for index, urls in enumerate(chunks):
+            with open(f'chunks/chunk_{index:02d}.txt', 'w') as f:
+                f.writelines(url + '\n' for url in urls)
+        print(f"[+] 전체 URL {len(valid_targets)}개를 호스트 단위로 20개 작업에 배분: {sizes}")
+        return
+
+    # The optional bounded mode only probes bare HTTPS roots.
     hosts = {urlparse(u).hostname for u in valid_targets}
     for path in glob.glob('results/*_all_targets.txt'):
         for line in open(path, encoding='utf-8', errors='ignore'):
@@ -128,7 +149,6 @@ def run_mixer():
     )
     # Fixed ceiling: a workflow input cannot raise it accidentally.
     selected = roots[:20]
-    os.makedirs('chunks', exist_ok=True)
     with open('chunks/chunk_00.txt', 'w') as f:
         f.writelines(url + '\n' for url in selected)
     print(f"[+] URL {len(valid_targets)}개 기록, HEAD 후보 {len(selected)}개 / 전체 {len(roots)}개 호스트")
