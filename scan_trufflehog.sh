@@ -15,7 +15,9 @@ scan_truffle() {
     trufflehog filesystem "$dir" --only-verified --json 2>/dev/null > "results/${safe_domain}_trufflehog_raw_${group}.json" || true
     
     if [ -s "results/${safe_domain}_trufflehog_raw_${group}.json" ]; then
-        cat "results/${safe_domain}_trufflehog_raw_${group}.json" | jq -r '. | ((.SourceMetadata.Data.Filesystem.file // "unknown.js") | split("/") | last) + "\t[" + (.DetectorName // "Secret") + "] " + ((.Raw // "") | gsub("\n"; " "))' > "results/${safe_domain}_trufflehog_${group}.txt" || true
+        # Never write the detected secret itself to artifacts or reports.
+        jq -r '((.SourceMetadata.Data.Filesystem.file // "unknown.js") | split("/") | last) + "\t" + (.DetectorName // "Secret") + "\tverified"' \
+          "results/${safe_domain}_trufflehog_raw_${group}.json" > "results/${safe_domain}_trufflehog_${group}.txt" || true
     else
         echo "" > "results/${safe_domain}_trufflehog_${group}.txt"
     fi

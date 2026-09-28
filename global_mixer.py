@@ -4,6 +4,7 @@ import glob
 import re
 import random
 import posixpath
+import sqlite3
 from urllib.parse import urlparse, parse_qsl
 
 def make_absolute(url, domain):
@@ -46,7 +47,7 @@ def run_mixer():
     for file_path in txt_files:
         if not os.path.isfile(file_path): continue
         filename = os.path.basename(file_path).lower()
-        match = re.match(r'^(.*)_(linkfinder|trufflehog|gau|waybackurls)(?:_[0-9]{2})?\.txt$', filename)
+        match = re.match(r'^(.*)_(linkfinder|gau|waybackurls|katana)(?:_[0-9]{2})?\.txt$', filename)
         if not match: continue
         
         safe_domain = match.group(1)
@@ -80,15 +81,13 @@ def run_mixer():
                     all_urls.add(abs_url)
         except: pass
 
-    # 💡 [핵심 추가] 이전 스캔에서 찾아둔 과거 URL 텍스트 DB를 통째로 쏟아 붓습니다! (오늘 Httpx가 상태를 재검사하게 됨)
-    prev_db_path = 'previous_report/master_url_db.txt'
+    # Restore the actual report database; the old text filename was not in the artifact.
+    prev_db_path = 'previous_report/recon_history.db'
     if os.path.exists(prev_db_path):
         try:
-            print("[*] 이전 스캔 텍스트 DB를 글로벌 믹서에 합류시킵니다 (Httpx 전체 재검사)...")
-            with open(prev_db_path, 'r', encoding='utf-8') as f:
-                for line in f:
-                    url = line.strip()
-                    if url: all_urls.add(url)
+            print("[*] 이전 스캔 DB의 URL을 현재 범위 안에서 재검사합니다...")
+            with sqlite3.connect(prev_db_path) as conn:
+                all_urls.update(row[0] for row in conn.execute("SELECT url FROM master_urls"))
         except Exception as e:
             print(f"[-] 텍스트 DB 합류 실패: {e}")
 
@@ -96,25 +95,24 @@ def run_mixer():
     blacklist_words = ['logout', 'signout', 'delete', 'remove', 'revoke', 'destroy']
     
     valid_targets = []
-    signature_counts = {}
     
     for u in all_urls:
         parsed = urlparse(u)
+        host = parsed.hostname or ''
+        if parsed.scheme not in ('http', 'https') or parsed.username or parsed.password:
+            continue
+        if not any(
+            host == target[2:] or host.endswith('.' + target[2:])
+            if target.startswith('*.') else host == target
+            for target in targets
+        ):
+            continue
         
         if parsed.path.lower().endswith(junk_exts): continue
         url_lower = u.lower()
         if any(b in url_lower for b in blacklist_words): continue
             
-        query_keys = tuple(sorted([k for k, v in parse_qsl(parsed.query, keep_blank_values=True)]))
-        normalized_path = normalize_dynamic_path(parsed.path)
-        path_dir = posixpath.dirname(normalized_path)
-        path_ext = posixpath.splitext(normalized_path)[1]
-        
-        signature = (parsed.netloc, path_dir, path_ext, query_keys)
-        
-        if signature_counts.get(signature, 0) >= 5: continue
-            
-        signature_counts[signature] = signature_counts.get(signature, 0) + 1
+        # Preserve every original URL. Grouping for display must not discard probes.
         valid_targets.append(u)
 
     random.shuffle(valid_targets)

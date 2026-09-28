@@ -10,6 +10,7 @@ import asyncio
 import aiohttp
 import requests
 import time
+import hashlib
 from datetime import datetime
 from urllib.parse import urlparse, parse_qsl
 from openpyxl import Workbook
@@ -26,6 +27,20 @@ except ImportError:
 def escape_formula(value):
     if isinstance(value, str) and value.startswith(('=', '+', '-', '@')): return "'" + value
     return value
+
+def ai_feature(url):
+    parsed = urlparse(url)
+    path = normalize_dynamic_path(parsed.path)
+    path = re.sub(r'[a-zA-Z0-9_-]{24,}', '{value}', path)
+    return {"id": hashlib.sha256(url.encode()).hexdigest(), "path": path,
+            "query_keys": sorted(set(k for k, _ in parse_qsl(parsed.query, keep_blank_values=True)))}
+
+def probe_state(url, statuses, unsafe_words, static_extensions):
+    if any(word in url.lower() for word in unsafe_words):
+        return "Skipped(위험)"
+    if urlparse(url).path.lower().endswith(static_extensions):
+        return "Static(생략)"
+    return statuses.get(url, "NotProbed")
 
 def make_absolute(url, domain):
     if url.startswith('http://') or url.startswith('https://'): return url
@@ -130,13 +145,13 @@ def get_best_gemini_model(api_key):
 async def ask_gemini_async(session, gemini_key, batch, model_name):
     prompt = (
         "You are an elite Bug Bounty Hunter and Red Teamer. Analyze the following list of URLs discovered during passive reconnaissance.\n"
-        "Evaluate the probability (0 to 100) that each URL contains a sensitive information disclosure or critical vulnerability based purely on its paths, parameters, and naming conventions.\n"
+        "Rank manual review priority (0 to 100) using only path patterns and query key names. Never claim a vulnerability is confirmed.\n"
         "Return EXACTLY a JSON array of objects. Do not include markdown formatting or backticks. Each object must contain these keys:\n"
-        "- 'url': the exact URL string\n"
-        "- 'probability': integer from 0 to 100\n"
+        "- 'id': the exact opaque id from the input\n"
+        "- 'priority': integer from 0 to 100\n"
         "- 'vuln_type': string of suspected vulnerability type\n"
         "- 'reason': short clear explanation in Korean of why this URL is high risk.\n\n"
-        f"URLs:\n{json.dumps(batch)}"
+        f"Path features:\n{json.dumps(batch)}"
     )
     g_api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_key}"
     payload = {
@@ -279,6 +294,8 @@ def build_advanced_excel_report():
     cursor.execute("CREATE TABLE IF NOT EXISTS master_urls (url TEXT PRIMARY KEY)")
     cursor.execute("CREATE TABLE IF NOT EXISTS downloaded_js (url TEXT PRIMARY KEY)")
     cursor.execute("CREATE TABLE IF NOT EXISTS historical_subdomains (subdomain TEXT PRIMARY KEY)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS endpoint_reviews (url TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'unreviewed', owner TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '')")
+    cursor.execute("CREATE TABLE IF NOT EXISTS probe_history (url TEXT PRIMARY KEY, status TEXT NOT NULL, last_seen TEXT NOT NULL)")
     cursor.execute('''CREATE TABLE IF NOT EXISTS target_stats (
         target TEXT PRIMARY KEY, passive_tot INTEGER DEFAULT 0, jsluice_tot INTEGER DEFAULT 0, katana_tot INTEGER DEFAULT 0 
     )''')
@@ -290,14 +307,13 @@ def build_advanced_excel_report():
 
     target_map = {get_safe_domain(t): t for t in all_targets}
     matrix_data = {raw_target: {} for raw_target in all_targets}
-    signature_counts = {}
 
     junk_extensions = ('.png', '.jpg', '.jpeg', '.gif', '.svg', '.css', '.woff', '.woff2', '.ico', '.eot', '.ttf', '.mp4')
     blacklist_words = ['logout', 'signout', 'delete', 'remove', 'revoke', 'destroy']
     high_value_kw = ['jenkins', 'grafana', 'kibana', 'elastic', 'admin', 'dashboard']
 
     js_url_converter = {}
-    for mf in glob.glob('results/*_js_mapping.txt'):
+    for mf in glob.glob('results/*_js_mapping_*.txt') + glob.glob('results/*_js_mapping.txt'):
         try:
             with open(mf, 'r', encoding='utf-8', errors='ignore') as f:
                 for line in f:
@@ -311,7 +327,7 @@ def build_advanced_excel_report():
 
     for file_path in glob.glob('results/*.*'):
         filename = os.path.basename(file_path).lower()
-        match = re.match(r'^(.*)_(linkfinder|trufflehog|gau|waybackurls|katana)(?:_[0-9]{2})?\.txt$', filename)
+        match = re.match(r'^(.*)_(linkfinder|gau|waybackurls|katana)(?:_[0-9]{2})?\.txt$', filename)
         if not match: continue
 
         safe_domain = match.group(1)
@@ -322,7 +338,6 @@ def build_advanced_excel_report():
         base_domain = raw_target[2:] if is_wildcard else raw_target
 
         if 'linkfinder' in filename or 'jsluice' in filename: source_tool = 'LinkFinder'
-        elif 'trufflehog' in filename: source_tool = 'TruffleHog'
         elif 'waybackurls' in filename: source_tool = 'Waybackurls'
         elif 'gau' in filename: source_tool = 'GAU'
         elif 'katana' in filename: source_tool = 'Katana'
@@ -371,15 +386,22 @@ def build_advanced_excel_report():
         signature = (parsed_for_sig.netloc, posixpath.dirname(norm_path), posixpath.splitext(norm_path)[1], query_keys)
 
         if abs_url not in matrix_data[raw_target]:
-            if signature_counts.get(signature, 0) >= 5: continue
-            signature_counts[signature] = signature_counts.get(signature, 0) + 1
+            # Keep every exact URL; signatures are for presentation only.
 
             is_new = abs_url not in existing_urls_cache
             matrix_data[raw_target][abs_url] = {"tools": set(), "files": set(), "is_new": is_new}
 
         matrix_data[raw_target][abs_url]["tools"].add(source_tool)
-        if source_tool in ['LinkFinder', 'TruffleHog']:
+        if source_tool == 'LinkFinder':
             matrix_data[raw_target][abs_url]["files"].add(js_file)
+
+    secret_findings = []
+    for path in glob.glob('results/*_trufflehog_*.txt'):
+        with open(path, encoding='utf-8', errors='replace') as findings_file:
+            for line in findings_file:
+                parts = line.rstrip('\n').split('\t')
+                if len(parts) == 3:
+                    secret_findings.append((os.path.basename(path), js_url_converter.get(parts[0], parts[0]), parts[1], parts[2]))
 
     status_codes = {}
     server_info = {}
@@ -391,13 +413,19 @@ def build_advanced_excel_report():
                     if not line.strip(): continue
                     data = json.loads(line.strip())
                     url = data.get('url')
-                    status_codes[url] = data.get('status_code', 'Dead')
+                    status_codes[url] = data.get('status_code') or 'ProbeError'
 
                     server_info[url] = data.get('webserver', '-')
                     techs = data.get('tech')
                     if isinstance(techs, list): tech_info[url] = ", ".join(techs)
                     else: tech_info[url] = str(techs) if techs else '-'
         except: pass
+
+    previous_status = dict(cursor.execute("SELECT url, status FROM probe_history"))
+    status_changes = [(url, previous_status[url], str(status))
+                      for url, status in status_codes.items()
+                      if url in previous_status and previous_status[url] != str(status)]
+    reviews = {row[0]: row[1:] for row in cursor.execute("SELECT url, status, owner, note FROM endpoint_reviews")}
 
     dork_results = run_duckduckgo_dorking(targets)
 
@@ -408,18 +436,20 @@ def build_advanced_excel_report():
         candidate_urls = []
         for url_map in matrix_data.values():
             for url, data in url_map.items():
-                sc = str(status_codes.get(url, 'Dead'))
-                if 'TruffleHog' in data["tools"] or sc in ['200', '301', '302', '401', '403', '500'] or '?' in url:
+                sc = str(status_codes.get(url, 'NotProbed'))
+                if sc in ['200', '301', '302', '401', '403', '500'] or '?' in url:
                     candidate_urls.append(url)
 
-        candidate_urls = list(set(candidate_urls))[:300]
+        candidate_urls = list(dict.fromkeys(candidate_urls))[:300]
         if candidate_urls:
             selected_model = get_best_gemini_model(gemini_key)
             print(f"[+] 총 {len(candidate_urls)}개의 중요 엔드포인트를 식별하여 AI 추론을 요청합니다...", flush=True)
-            ai_ranked_results = asyncio.run(process_all_gemini(gemini_key, candidate_urls, selected_model))
-
-            if ai_ranked_results:
-                ai_ranked_results.sort(key=lambda x: x.get('probability', 0), reverse=True)
+            feature_map = {ai_feature(url)["id"]: url for url in candidate_urls}
+            ai_ranked_results = asyncio.run(process_all_gemini(gemini_key, [ai_feature(url) for url in candidate_urls], selected_model))
+            ai_ranked_results = [dict(row, url=feature_map[row["id"]]) for row in ai_ranked_results
+                                 if isinstance(row, dict) and row.get("id") in feature_map
+                                 and type(row.get("priority")) is int and 0 <= row["priority"] <= 100]
+            ai_ranked_results.sort(key=lambda x: x["priority"], reverse=True)
 
     now_str = datetime.now().strftime("%Y%m%d_%H%M")
 
@@ -440,6 +470,22 @@ def build_advanced_excel_report():
 
     ws_dash = wb.active
     ws_dash.title = "Summary Dashboard"
+
+    ws_secrets = wb.create_sheet(title="🔐 Secrets (검토)")
+    ws_secrets.append(["결과 파일", "JS 출처", "탐지기", "검증 상태"])
+    for finding in secret_findings:
+        ws_secrets.append([escape_formula(value) for value in finding])
+
+    ws_changes = wb.create_sheet(title="🔄 Status Changes")
+    ws_changes.append(["URL", "이전 상태", "현재 상태"])
+    for change in status_changes:
+        ws_changes.append([escape_formula(value) for value in change])
+
+    ws_review = wb.create_sheet(title="📝 Review Queue")
+    ws_review.append(["URL", "상태", "담당자", "메모"])
+    for url in sorted({url for entries in matrix_data.values() for url in entries}):
+        status, owner, note = reviews.get(url, ("unreviewed", "", ""))
+        ws_review.append([escape_formula(url), escape_formula(status), escape_formula(owner), escape_formula(note)])
 
     # === [수정] 5개의 기능 분류 헤더 대시보드 반영 ===
     dash_headers = [
@@ -490,7 +536,7 @@ def build_advanced_excel_report():
         domain_katana_count = sum(1 for data in url_map.values() if 'Katana' in data["tools"])
         today_jsluice_total = sum(1 for data in url_map.values() if 'LinkFinder' in data["tools"])
         jsluice_new = sum(1 for data in url_map.values() if 'LinkFinder' in data["tools"] and data.get("is_new", False))
-        trufflehog_count = sum(1 for data in url_map.values() if 'TruffleHog' in data["tools"])
+        trufflehog_count = sum(1 for filename, _, _, _ in secret_findings if filename.startswith(get_safe_domain(raw_target) + "_"))
 
         cursor.execute("SELECT passive_tot, jsluice_tot, katana_tot FROM target_stats WHERE target = ?", (raw_target,))
         row = cursor.fetchone()
@@ -512,7 +558,7 @@ def build_advanced_excel_report():
 
         for url in url_map.keys():
             all_today_discovered_urls.append(url)
-            status = str(status_codes.get(url, 'Dead'))
+            status = str(status_codes.get(url, 'NotProbed'))
             if status.startswith('2'): count_200 += 1
             elif status in ['401', '403']: count_40x += 1
             elif status.startswith('5'): count_50x += 1
@@ -602,8 +648,8 @@ def build_advanced_excel_report():
     for raw_target, url_map in matrix_data.items():
         for url, data in url_map.items():
             is_blacklist = any(b in url.lower() for b in blacklist_words)
-            current_status = "Skipped(위험)" if is_blacklist else ( "Static(생략)" if urlparse(url).path.lower().endswith(junk_extensions) else status_codes.get(url, 'Dead') )
-            is_new_subdomain = (urlparse(url).netloc in new_subdomains) if 'new_subdomains' in locals() else False
+            current_status = probe_state(url, status_codes, blacklist_words, junk_extensions)
+            is_new_subdomain = urlparse(url).netloc in global_new_subdomains
             sub_mark = "🌟 신규" if is_new_subdomain else "-"
             c_server, c_tech = server_info.get(url, '-'), tech_info.get(url, '-')
             tools_str, files_str = ", ".join(sorted(list(data["tools"]))), ", ".join(sorted(list(data["files"]))) if data["files"] else "-"
@@ -613,8 +659,7 @@ def build_advanced_excel_report():
             combined_context = f"{url} {c_server} {c_tech}".lower()
             detected_kw = [kw for kw in high_value_kw if kw in combined_context]
 
-            if 'TruffleHog' in data["tools"]: is_high_risk, reason = True, "🔥 [Critical] TruffleHog: 기밀 키(Secret) 유출 의심"
-            elif is_blacklist: is_high_risk, reason = True, "⚠️ [Warning] 파괴적 엔드포인트 수동 검점 요망"
+            if is_blacklist: is_high_risk, reason = True, "⚠️ [Warning] 파괴적 엔드포인트 수동 검점 요망"
             elif detected_kw: is_high_risk, reason = True, f"🚩 [High-Value] 주요 관리자/인프라 패널 식별 ({', '.join(detected_kw).title()})"
             else:
                 path_lower = urlparse(url).path.lower()
@@ -642,7 +687,7 @@ def build_advanced_excel_report():
     # =========================================================================
     if ai_ranked_results:
         ws_ai = wb.create_sheet(title="🔮 Gemini AI Ranking")
-        ai_headers = ["No", "🔮 잠재적 위험 확률 (%)", "📡 응답 상태", "🎯 타겟 URL", "⚠️ 위험 유형", "💡 Gemini AI 분석 가이드"]
+        ai_headers = ["No", "🔮 수동 점검 우선순위", "📡 응답 상태", "🎯 타겟 URL", "⚠️ 검토 유형", "💡 Gemini AI 분석 가이드"]
         ws_ai.append(ai_headers)
         for c in range(1, 7):
             ws_ai.cell(1, c).font = font_header
@@ -651,8 +696,8 @@ def build_advanced_excel_report():
 
         for idx, res in enumerate(ai_ranked_results, 1):
             ai_url = res.get('url')
-            ai_status = str(status_codes.get(ai_url, 'Dead'))
-            ws_ai.append([idx, f"{res.get('probability')}%", ai_status, escape_formula(ai_url), escape_formula(res.get('vuln_type')), escape_formula(res.get('reason'))])
+            ai_status = str(status_codes.get(ai_url, 'NotProbed'))
+            ws_ai.append([idx, res["priority"], ai_status, escape_formula(ai_url), escape_formula(res.get('vuln_type')), escape_formula(res.get('reason'))])
             for c in range(1, 7):
                 cell = ws_ai.cell(idx + 1, c)
                 cell.font = font_data; cell.border = thin_border
@@ -773,7 +818,7 @@ def build_advanced_excel_report():
         sorted_urls = sorted(url_map.items(), key=lambda x: (
             get_function_priority(get_function_category(x[0])), # 1순위: 기능
             not x[1].get("is_new", False),                      # 2순위: 신규 여부
-            get_status_priority(status_codes.get(x[0], 'Dead') if any(b not in x[0].lower() for b in blacklist_words) else 'Skipped(위험)'), # 3순위: 응답 상태
+            get_status_priority(probe_state(x[0], status_codes, blacklist_words, junk_extensions)), # 3순위: 응답 상태
             x[0]
         ))
 
@@ -785,9 +830,9 @@ def build_advanced_excel_report():
 
             if not is_blacklist:
                 parsed_pm = urlparse(url)
-                postman_folder["item"].append({"name": parsed_pm.path if parsed_pm.path else "/", "request": {"method": "GET", "header": [], "url": {"raw": url, "protocol": parsed_pm.scheme, "host": parsed_pm.netloc.split('.'), "path": [p for p in parsed_pm.path.split('/') if p], "query": [{"key": k, "value": v} for k, v in parse_qsl(parsed_pm.query, keep_blank_values=True)]}}})
+                postman_folder["item"].append({"name": parsed_pm.path if parsed_pm.path else "/", "request": {"method": "GET", "description": "Method inferred from a URL only. Confirm the actual request before sending.", "header": [], "url": {"raw": url, "protocol": parsed_pm.scheme, "host": parsed_pm.netloc.split('.'), "path": [p for p in parsed_pm.path.split('/') if p], "query": [{"key": k, "value": v} for k, v in parse_qsl(parsed_pm.query, keep_blank_values=True)]}}})
 
-            current_status = "Skipped(위험)" if is_blacklist else ( "Static(생략)" if urlparse(url).path.lower().endswith(junk_extensions) else status_codes.get(url, 'Dead') )
+            current_status = probe_state(url, status_codes, blacklist_words, junk_extensions)
             is_new_subdomain = (urlparse(url).netloc in new_subdomains) and bool(previous_subdomains)
             sub_mark = "🌟 신규" if is_new_subdomain else "-"
             c_server, c_tech = server_info.get(url, '-'), tech_info.get(url, '-')
@@ -831,7 +876,7 @@ def build_advanced_excel_report():
             cell.font = Font(name='Malgun Gothic', size=11, bold=True, color='FFFFFF'); cell.fill = PatternFill(start_color='1F4E78', end_color='1F4E78', fill_type='solid')
             cell.border = thin_border; cell.alignment = align_center if c != 2 else align_left
 
-    sheet_order = ["Summary Dashboard", "🔮 Gemini AI Ranking", "🚨 High Risk (고위험군)", "🌐 서브도메인 연혁(Wayback)", "🔍 OSINT Dorking"]
+    sheet_order = ["Summary Dashboard", "🔄 Status Changes", "🔐 Secrets (검토)", "📝 Review Queue", "🔮 Gemini AI Ranking", "🚨 High Risk (고위험군)", "🌐 서브도메인 연혁(Wayback)", "🔍 OSINT Dorking"]
     ordered_sheets = []
     for title in sheet_order:
         if title in wb.sheetnames:
@@ -848,6 +893,9 @@ def build_advanced_excel_report():
         today_subs = {urlparse(u).netloc.split(':')[0] for u in all_today_discovered_urls if urlparse(u).netloc}
         if today_subs: cursor.executemany("INSERT OR IGNORE INTO historical_subdomains (subdomain) VALUES (?)", [(s,) for s in today_subs])
         conn.commit()
+    cursor.executemany("INSERT INTO probe_history(url,status,last_seen) VALUES(?,?,?) ON CONFLICT(url) DO UPDATE SET status=excluded.status,last_seen=excluded.last_seen",
+                       [(url, str(status), datetime.now().isoformat()) for url, status in status_codes.items()])
+    conn.commit()
     conn.close()
 
     if global_new_subdomains:
@@ -858,7 +906,7 @@ def build_advanced_excel_report():
     # 열 너비(Width) 자동 맞춤 조정 (변경된 헤더명 기준 매핑)
     # =========================================================================
     for sheet in wb.worksheets:
-        header_row_val = 1 if sheet.title in ["Summary Dashboard", "🚨 High Risk (고위험군)", "🔮 Gemini AI Ranking", "🌐 서브도메인 연혁(Wayback)", "🔍 OSINT Dorking"] else 2
+        header_row_val = 1 if sheet.title in ["Summary Dashboard", "🔄 Status Changes", "🔐 Secrets (검토)", "📝 Review Queue", "🚨 High Risk (고위험군)", "🔮 Gemini AI Ranking", "🌐 서브도메인 연혁(Wayback)", "🔍 OSINT Dorking"] else 2
         for col_idx, col in enumerate(sheet.columns, 1):
             col_letter = get_column_letter(col_idx)
             header = str(sheet.cell(header_row_val, col_idx).value or "")

@@ -10,7 +10,6 @@ if [ ! -f "$TARGETS_FILE" ]; then
 fi
 
 mkdir -p results
-touch global_js_db.txt
 
 echo "==================================================================="
 echo "🚀 [Node-$GROUP] 정찰 파이프라인 가동 (MapReduce 기반 분산 스캔)"
@@ -63,39 +62,14 @@ for TARGET_FILE in results/*_all_targets.txt; do
   # 5. JS 파일 추출 및 스마트 다운로드 (방어 로직 강화)
   # ---------------------------------------------------------
   echo "  [+] ⚙️ 수집된 전체 데이터에서 JavaScript(JS) 타겟 추출 중..."
-  cat "results/${SAFE_DOMAIN}_"*"_${GROUP}.txt" 2>/dev/null | grep -iE '\.js($|\?)' | awk -F '?' '{print $1}' | sort -u > "results/${SAFE_DOMAIN}_js_targets.txt" || true
+  cat "results/${SAFE_DOMAIN}_"*"_${GROUP}.txt" 2>/dev/null | grep -iE '\.m?js($|\?)' | sort -u > "results/${SAFE_DOMAIN}_js_targets.txt" || true
   JS_TOTAL=$(wc -l < "results/${SAFE_DOMAIN}_js_targets.txt" 2>/dev/null || echo 0)
 
   if [ "$JS_TOTAL" -gt 0 ]; then
     echo "  [+] 💡 총 ${JS_TOTAL}개의 자바스크립트(JS) 소스 경로를 식별했습니다."
 
-    # 이전에 분석한 JS 파일 제외 (스마트 필터링)
-    grep -v -F -f global_js_db.txt "results/${SAFE_DOMAIN}_js_targets.txt" > "results/${SAFE_DOMAIN}_js_new.txt" 2>/dev/null || cat "results/${SAFE_DOMAIN}_js_targets.txt" > "results/${SAFE_DOMAIN}_js_new.txt"
-    JS_NEW=$(wc -l < "results/${SAFE_DOMAIN}_js_new.txt" 2>/dev/null || echo 0)
-
-    echo "  [!] 🛡️ [중복 방지] 과거에 분석 완료된 파일 제외: ${JS_NEW}개의 신규 JS만 남았습니다."
-
-    if [ "$JS_NEW" -gt 0 ]; then
-      head -n 1000 "results/${SAFE_DOMAIN}_js_new.txt" > "results/${SAFE_DOMAIN}_js_final.txt"
-      JS_FINAL=$(wc -l < "results/${SAFE_DOMAIN}_js_final.txt" 2>/dev/null || echo 0)
-
-      echo "  [!] 🛡️ [용량 보호] 디스크 과부하 및 타임아웃 방지를 위해 최대 ${JS_FINAL}개까지만 다운로드를 진행합니다."
-      echo "  [+] 📥 JS 다운로드 병렬(10 Thread) 가동 중..."
-
-      mkdir -p "results/${SAFE_DOMAIN}_js_files_${GROUP}"
-      
-      # 💡 xargs 내부 curl 에러로 인한 Exit Code 123 방지를 위해 || true 처리 추가
-      cat "results/${SAFE_DOMAIN}_js_final.txt" | xargs -I {} -P 10 sh -c '
-        url="{}"
-        filename=$(basename "$url")
-        curl -s -f -m 3 --create-dirs -o "results/'${SAFE_DOMAIN}'_js_files_'${GROUP}'/$filename" "$url" && echo "$url" >> global_js_db.txt || true
-      ' || true
-
-      DOWNLOADED=$(ls -1q "results/${SAFE_DOMAIN}_js_files_${GROUP}" 2>/dev/null | wc -l)
-      echo "  [+] ✅ 다운로드 성공: 총 ${DOWNLOADED} 개 확보"
-    else
-      echo "  [+] ✅ 다운로드할 신규 JS 파일이 없습니다. (모두 이미 분석됨)"
-    fi
+    echo "  [+] 📥 JS 다운로드: URL과 콘텐츠 해시로 파일명을 분리합니다."
+    python3 js_assets.py "results/${SAFE_DOMAIN}_js_targets.txt" "results/${SAFE_DOMAIN}_js_files_${GROUP}" "results/${SAFE_DOMAIN}_js_mapping_${GROUP}.txt" || true
   else
     echo "  [-] 💡 식별된 JS 소스 경로가 없습니다."
   fi
