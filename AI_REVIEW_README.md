@@ -57,6 +57,42 @@ them before uploading a configuration or sharing a result.
 
 ## Live mode: explicit authorization required
 
+### Local ChatGPT Plus/Pro sign-in (no separate API key)
+
+Use this only on your own computer with an eligible ChatGPT account. Install
+`openai` and `cryptography`, then authorize this app once in the browser that
+runs on the same computer as the CLI. Approve ChatGPT plan usage if prompted.
+
+```bash
+python3 -m pip install openai cryptography
+python3 chatgpt_auth.py login
+python3 chatgpt_auth.py models
+python3 ai_review.py --auth chatgpt --live --config ai_review.config.json \
+  --urls-file candidate_urls.txt --output review_results.jsonl
+```
+
+The first listed model is selected by default. To choose another, set
+`chatgpt_model` in the local JSON config to a slug printed by `models`.
+The credentials and stable host ID live in owner-only files in
+`~/.config/passive-scan-review/`. Keep this directory and the JSONL output
+private. Refresh tokens are rotated automatically. This login is only for
+local use; the separate GitHub Actions workflow continues to use its API key.
+ChatGPT plan usage has its own limits and is not an unlimited six-hour batch
+quota. The application never obtains your ChatGPT conversation history.
+
+To exercise real GPT decisions on the controlled fake site, after login run:
+
+```bash
+python3 tests/lab_demo.py --chatgpt --output lab_gpt_results.jsonl
+```
+
+This lab starts a local server, gives the planner only bounded GET choices,
+and writes each observed result. Unlike the fixed lab planner, GPT can choose
+`stop` or other permitted actions, so the number of findings can vary. The
+default lab run without `--chatgpt` remains deterministic and offline.
+
+### API-key mode
+
 Install optional API dependency and set your OpenAI API key locally. If using
 two authorized test accounts, map environment variables in the JSON config;
 tokens are read on the test runner and are never included in model input.
