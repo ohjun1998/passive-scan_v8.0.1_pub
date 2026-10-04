@@ -64,7 +64,7 @@ class LabPlanner:
         return {"action": action, "reason": "Local lab demonstration"}
 
 
-def run_lab(output):
+def run_lab(output, planner=None):
     order_url = f"http://{HOST}:{PORT}/api/orders/123"
     search_url = f"http://{HOST}:{PORT}/search?q=example"
     config = {
@@ -86,17 +86,18 @@ def run_lab(output):
         try:
             policy = ai_review.Policy(config, allow_private_lab=True)
             client = ai_review.HttpClient(policy, {"a": "lab-account-a", "b": "lab-account-b"})
-            summary = ai_review.run(config, ai_review.load_urls(config, db), LabPlanner(),
+            summary = ai_review.run(config, ai_review.load_urls(config, db), planner or LabPlanner(),
                                     client, output, live=True)
         finally:
             server.shutdown()
             server.server_close()
             thread.join()
     rows = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
-    assert summary["requests"] == 3, summary
-    assert {item["kind"] for row in rows for item in row["findings"]} == {
-        "access_control", "reflected_input"
-    }, rows
+    if planner is None:
+        assert summary["requests"] == 3, summary
+        assert {item["kind"] for row in rows for item in row["findings"]} == {
+            "access_control", "reflected_input"
+        }, rows
     print(json.dumps({"summary": summary, "findings": [
         {"url": row["url"], "findings": row["findings"]} for row in rows
     ]}, ensure_ascii=False, indent=2))
@@ -105,5 +106,6 @@ def run_lab(output):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=Path("lab_review_results.jsonl"))
+    parser.add_argument("--chatgpt", action="store_true", help="Use your local ChatGPT login instead of fixed lab decisions")
     args = parser.parse_args()
-    run_lab(args.output)
+    run_lab(args.output, ai_review.ChatGPTPlanner() if args.chatgpt else None)
