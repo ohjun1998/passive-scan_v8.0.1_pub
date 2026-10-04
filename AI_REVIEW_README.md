@@ -160,3 +160,9 @@ order and a search term echoed in JSON. The latter is **not** XSS.
 The lab uses a fixed decision planner in place of the OpenAI API, so it
 tests the HTTP, policy and result path but does not validate GPT connectivity
 or model decisions. No GitHub Actions secrets are needed for this local test.
+
+GitHub Actions also runs `tests/lab_chatgpt_mock.py`, which supplies streamed
+model-style decisions to the actual `ChatGPTPlanner` and sends bounded GETs to
+the local lab. It verifies the resulting findings without an account or API
+key. It cannot prove interactive ChatGPT login, account permission, live model
+availability, or model behavior: those require a separate local sign-in test.
