@@ -129,6 +129,18 @@ class AiReviewTests(unittest.TestCase):
         self.assertEqual(json.loads(rows[0])["state"], "halted_on_server_signal")
         self.assertEqual(opener.open.call_count, 1)
 
+    def test_nonstandard_port_only_for_explicit_loopback_lab(self):
+        lab = ai_review.Policy({"allowed_hosts": ["127.0.0.1"],
+                                "live_path_prefixes": ["/api/"]}, allow_private_lab=True)
+        self.assertEqual(lab.validate("http://127.0.0.1:18080/api/orders/123", live=True).port,
+                         18080)
+        public = ai_review.Policy(self.config, allow_private_lab=True)
+        with self.assertRaises(ValueError):
+            public.validate("https://example.test:18080/api/orders/123", live=True)
+        with self.assertRaises(ValueError):
+            ai_review.Policy({"allowed_hosts": ["127.0.0.1"]}).validate(
+                "http://127.0.0.1:18080/api/orders/123")
+
     def test_gpt_planner_only_accepts_preapproved_actions(self):
         fake_create = Mock(return_value=SimpleNamespace(output_text='{"action":"b","reason":"test"}'))
         fake_openai = SimpleNamespace(OpenAI=lambda: SimpleNamespace(

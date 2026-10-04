@@ -78,7 +78,9 @@ class Policy:
             raise ValueError("Invalid URL authority") from exc
         if (parts.scheme not in ("https", "http") or hostname not in self.hosts
                 or parts.username or parts.password or parts.fragment or not parts.path.startswith("/")
-                or port not in (None, 80, 443)
+                or (port not in (None, 80, 443) and not (
+                    self.allow_private_lab and hostname in ("localhost", "127.0.0.1")
+                ))
                 or (parts.scheme == "http" and not self.allow_private_lab)):
             raise ValueError("URL outside explicit HTTP scope")
         decoded_path = urllib.parse.unquote(parts.path)
