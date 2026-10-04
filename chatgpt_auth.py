@@ -212,11 +212,19 @@ class ChatGPTSession:
 
 if __name__ == "__main__":
     import argparse
+    import subprocess
     parser = argparse.ArgumentParser(description="Local ChatGPT plan connection")
-    parser.add_argument("command", choices=["login", "models"])
+    parser.add_argument("command", choices=["login", "models", "ci-secret"])
     args = parser.parse_args()
     session = ChatGPTSession()
     if args.command == "login":
         print(json.dumps(session.sign_in()))
-    else:
+    elif args.command == "models":
         print("\n".join(session.models()))
+    else:
+        subprocess.run(
+            ["gh", "secret", "set", "CHATGPT_CI_ACCESS_TOKEN", "--repo",
+             "ohjun1998/passive-scan_v8.0.1_pub", "--app", "actions"],
+            input=session.access_token(), text=True, check=True,
+        )
+        print("Temporary ChatGPT access token uploaded to GitHub Actions secret. Run the manual lab now.")
