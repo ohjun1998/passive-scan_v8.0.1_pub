@@ -166,3 +166,26 @@ model-style decisions to the actual `ChatGPTPlanner` and sends bounded GETs to
 the local lab. It verifies the resulting findings without an account or API
 key. It cannot prove interactive ChatGPT login, account permission, live model
 availability, or model behavior: those require a separate local sign-in test.
+
+## One-time real ChatGPT Plus test in GitHub Actions
+
+For a manual run against the same **local fake site** on a GitHub-hosted runner:
+
+1. On your own computer, install the optional Python dependencies and sign in
+   with `python3 chatgpt_auth.py login`. Install and authenticate GitHub CLI
+   (`gh auth login`) if needed.
+2. Run `python3 chatgpt_auth.py ci-secret` on that computer. This passes **only
+   the short-lived access token** through standard input to `gh secret set` for
+   this repository. The refresh token and local credential file stay local.
+3. Immediately open Actions → **ChatGPT Plus local lab (manual)** → **Run workflow**
+   on `main`. It lists available models, runs real streamed model decisions
+   against `127.0.0.1:18080` within that runner, and checks that the review
+   completed. The model can choose `stop`, so a specific finding is not required.
+4. Remove the temporary secret afterward with
+   `gh secret delete CHATGPT_CI_ACCESS_TOKEN --repo ohjun1998/passive-scan_v8.0.1_pub`.
+
+The access token normally expires after one hour. If the job starts after
+expiry, repeat step 2. This manual workflow is restricted to repository owner
+dispatches on `main`, runs for at most ten minutes, and never contacts a
+production target. No Plus account credentials are configured in ordinary PR
+or reconnaissance workflows.
