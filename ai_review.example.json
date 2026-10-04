@@ -1,0 +1,23 @@
+{
+  "model": "gpt-5.4",
+  "allowed_hosts": ["example.test"],
+  "live_path_prefixes": ["/api/orders/", "/search"],
+  "max_urls": 10,
+  "max_http_requests": 20,
+  "min_seconds_per_host": 2,
+  "urls": [
+    "https://example.test/api/orders/123",
+    "https://example.test/search?q=example"
+  ],
+  "credential_env": {
+    "a": "REVIEW_ACCOUNT_A_TOKEN",
+    "b": "REVIEW_ACCOUNT_B_TOKEN"
+  },
+  "expectations": {
+    "https://example.test/api/orders/123": {
+      "owner": "a",
+      "private_marker": "OWN_TEST_ORDER_MARKER",
+      "other_account_must_be_denied": true
+    }
+  }
+}
