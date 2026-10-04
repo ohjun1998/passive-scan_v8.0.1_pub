@@ -110,3 +110,17 @@ downloads the **specified** report, reads the SQLite URL list, and uploads
 encrypted review results as `bounded-ai-review-secured`. It never commits
 scan data or credentials to the repository. The optional live toggle requires
 the exact hosts and `live_path_prefixes` already configured in the secret.
+
+## Repeatable local HTTP lab
+
+To check the real request/response and report path without touching an
+external site, run `python3 tests/lab_demo.py --output lab_review_results.jsonl`
+in an environment that allows binding `127.0.0.1:18080`. The script starts
+a temporary local site, creates a tiny SQLite URL report, issues three GETs
+through the normal reviewer, checks the resulting manual-review candidates,
+and shuts the site down. It models an account B reading account A's own test
+order and a search term echoed in JSON. The latter is **not** XSS.
+
+The lab uses a fixed decision planner in place of the OpenAI API, so it
+tests the HTTP, policy and result path but does not validate GPT connectivity
+or model decisions. No GitHub Actions secrets are needed for this local test.
