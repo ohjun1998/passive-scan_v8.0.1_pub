@@ -1,0 +1,80 @@
+name: Bounded GPT review of a passive recon run
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: 'Completed passive_recon.yml run ID containing the secured report'
+        required: true
+        type: string
+      live:
+        description: 'Send explicitly scoped GET requests (default: offline plan only)'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: bounded-ai-review-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: passive-recon-master-report-secured
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: source_report
+      - name: Restore SQLite report and explicit target policy
+        env:
+          REPORT_PASSWORD: ${{ secrets.ACTIONS_CRYPTO_PASSWORD }}
+          REVIEW_CONFIG: ${{ secrets.AI_REVIEW_CONFIG_JSON }}
+        run: |
+          test -n "$REPORT_PASSWORD"
+          test -n "$REVIEW_CONFIG"
+          umask 077
+          python3 -c 'import os, pathlib; pathlib.Path("ai_review.config.json").write_text(os.environ["REVIEW_CONFIG"], encoding="utf-8")'
+          mkdir -p source_report/decrypted
+          unzip -q -P "$REPORT_PASSWORD" source_report/passive_recon_report_secured.zip recon_history.db -d source_report/decrypted
+      - name: Install GPT API dependency
+        if: inputs.live
+        run: python3 -m pip install openai
+      - name: GPT review or offline plan
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          REVIEW_ACCOUNT_A_TOKEN: ${{ secrets.REVIEW_ACCOUNT_A_TOKEN }}
+          REVIEW_ACCOUNT_B_TOKEN: ${{ secrets.REVIEW_ACCOUNT_B_TOKEN }}
+          LIVE_MODE: ${{ inputs.live }}
+        run: |
+          if [ "$LIVE_MODE" = true ]; then
+            python3 ai_review.py --config ai_review.config.json --db source_report/decrypted/recon_history.db --output ai_review_results.jsonl --live
+          else
+            python3 ai_review.py --config ai_review.config.json --db source_report/decrypted/recon_history.db --output ai_review_results.jsonl
+          fi
+      - name: Encrypt observations before uploading
+        if: always()
+        env:
+          REPORT_PASSWORD: ${{ secrets.ACTIONS_CRYPTO_PASSWORD }}
+        run: |
+          if [ -s ai_review_results.jsonl ]; then
+            umask 077
+            printf %s "$REPORT_PASSWORD" | gpg --symmetric --batch --yes --passphrase-fd 0 --cipher-algo AES256 --output ai_review_results.jsonl.gpg ai_review_results.jsonl
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bounded-ai-review-secured
+          path: ai_review_results.jsonl.gpg
+          if-no-files-found: ignore
+          retention-days: 7
