@@ -7,6 +7,10 @@ on:
         description: 'Completed passive_recon.yml run ID containing the secured report'
         required: true
         type: string
+      summary_run_id:
+        description: 'Optional completed bounded-ai-review run ID for aggregate HTTP status diagnostics'
+        required: false
+        type: string
       live:
         description: 'Send explicitly scoped GET requests (default: offline plan only)'
         required: true
@@ -116,6 +120,36 @@ jobs:
           if not reports or any(r["state"] in ("model_unavailable", "request_error") for r in reports):
               raise SystemExit("Plus review has no candidates or encountered a model/request error")
           print(f"Plus review processed {len(reports)} candidate(s)")
+          PY
+      - uses: actions/download-artifact@v4
+        if: inputs.summary_run_id != '' && !inputs.live
+        with:
+          name: bounded-ai-review-secured
+          run-id: ${{ inputs.summary_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: prior_review
+      - name: Summarize prior review HTTP statuses
+        if: inputs.summary_run_id != '' && !inputs.live
+        env:
+          REPORT_PASSWORD: ${{ secrets.ACTIONS_CRYPTO_PASSWORD }}
+        run: |
+          umask 077
+          printf %s "$REPORT_PASSWORD" | gpg --decrypt --batch --yes --passphrase-fd 0 \
+            --output "$RUNNER_TEMP/prior_review.jsonl" prior_review/ai_review_results.jsonl.gpg
+          python3 - <<'PY'
+          import collections
+          import json
+          import os
+          from pathlib import Path
+
+          rows = [json.loads(line) for line in
+                  (Path(os.environ["RUNNER_TEMP"]) / "prior_review.jsonl").read_text().splitlines()]
+          codes = collections.Counter(str(obs["status"]) for row in rows
+                                      for obs in row["observations"])
+          states = collections.Counter(row["state"] for row in rows)
+          print(json.dumps({"candidates": len(rows),
+                            "http_status_counts": dict(sorted(codes.items())),
+                            "review_states": dict(sorted(states.items()))}, sort_keys=True))
           PY
       - name: Encrypt observations before uploading
         if: always()
