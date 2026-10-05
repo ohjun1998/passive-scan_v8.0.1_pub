@@ -775,7 +775,7 @@ jobs:
 
   bounded-plus-review:
     needs: excel-reporter
-    if: ${{ inputs.mode == 'full' && inputs.plus_review && github.ref == 'refs/heads/main' && github.actor == 'ohjun1998' && needs.excel-reporter.result == 'success' }}
+    if: ${{ always() && inputs.mode == 'full' && inputs.plus_review && github.ref == 'refs/heads/main' && github.actor == 'ohjun1998' && needs.excel-reporter.result == 'success' }}
     permissions:
       contents: read
       actions: write
