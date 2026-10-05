@@ -77,7 +77,9 @@ def run_lab(output, planner=None):
     rows = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
     if len(rows) != 5 or any(row["state"] not in ("completed", "halted_on_server_signal")
                              for row in rows):
-        raise RuntimeError("Interactive lab review did not complete")
+        raise RuntimeError("Interactive lab review did not complete: " +
+                           json.dumps({"summary": summary, "states": [
+                               (row["url"], row["state"], row.get("error")) for row in rows]}))
     if planner is None and summary["requests"] != 5:
         raise RuntimeError("Expected one real GET per discovered candidate")
     print(json.dumps({"site": "loopback-only", "features": [
