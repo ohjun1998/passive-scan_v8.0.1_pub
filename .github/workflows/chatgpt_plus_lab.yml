@@ -1,19 +1,47 @@
 name: ChatGPT Plus local lab (manual)
 on:
   workflow_dispatch:
+    inputs:
+      reset_session:
+        description: 'Use newly uploaded bootstrap credentials after reconnecting ChatGPT'
+        type: boolean
+        default: false
 permissions:
   contents: read
+  actions: write
+concurrency:
+  group: chatgpt-plus-session
+  cancel-in-progress: false
 jobs:
   lab:
     if: github.ref == 'refs/heads/main' && github.actor == 'ohjun1998'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      CHATGPT_CI_ACCESS_TOKEN: ${{ secrets.CHATGPT_CI_ACCESS_TOKEN }}
+      CHATGPT_CI_SESSION_DIR: ${{ runner.temp }}/passive-scan-chatgpt
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - run: python -m pip install openai cryptography
+      - name: Restore protected ChatGPT session
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHATGPT_CI_BOOTSTRAP: ${{ secrets.CHATGPT_CI_BOOTSTRAP }}
+          CHATGPT_CI_KEY: ${{ secrets.CHATGPT_CI_KEY }}
+          CHATGPT_CI_RESET: ${{ inputs.reset_session }}
+        run: python ci_session.py restore --directory "$CHATGPT_CI_SESSION_DIR"
       - run: python tests/lab_chatgpt_ci.py
+      - name: Encrypt latest session for the next run
+        if: always()
+        env:
+          CHATGPT_CI_KEY: ${{ secrets.CHATGPT_CI_KEY }}
+        run: python ci_session.py checkpoint --directory "$CHATGPT_CI_SESSION_DIR" --output "$RUNNER_TEMP/chatgpt-checkpoint/session.enc"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chatgpt-ci-session
+          path: ${{ runner.temp }}/chatgpt-checkpoint/session.enc
+          if-no-files-found: error
+          retention-days: 30
