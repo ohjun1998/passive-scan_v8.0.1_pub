@@ -25,6 +25,15 @@ class ReadOnlyPlanner:
         return {"action": action, "reason": "Deterministic local site check"}
 
 
+class FollowUpPlanner:
+    """Simulate a model choosing both available search GETs."""
+
+    def choose(self, url, available, observations):
+        action = ("reflection" if "reflection" in available else
+                  "anonymous" if "anonymous" in available else "stop")
+        return {"action": action, "reason": "Exercise follow-up request budget"}
+
+
 def post(opener, base, path, fields):
     body = urllib.parse.urlencode(fields).encode()
     return opener.open(urllib.request.Request(base + path, data=body, method="POST"),
@@ -95,11 +104,18 @@ def run_lab(output, planner=None):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--chatgpt", action="store_true")
+    parser.add_argument("--followup", action="store_true")
     parser.add_argument("--output", type=Path, default=Path("/tmp/web_lab_results.jsonl"))
     args = parser.parse_args()
     planner = None
+    if args.chatgpt and args.followup:
+        parser.error("Choose one planner")
+    if args.followup:
+        planner = FollowUpPlanner()
     if args.chatgpt:
         from chatgpt_auth import ChatGPTSession
         planner = ai_review.ChatGPTPlanner(session=ChatGPTSession(
             os.environ["CHATGPT_CI_SESSION_DIR"]))
-    run_lab(args.output, planner)
+    summary, rows = run_lab(args.output, planner)
+    if args.followup and (summary["requests"] != 6 or len(rows) != 5):
+        raise RuntimeError("Follow-up planner did not cover all five candidates")
