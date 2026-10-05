@@ -150,11 +150,21 @@ jobs:
           categories = collections.Counter(kind for row in rows for kind in row["categories"])
           findings = collections.Counter(finding["kind"] for row in rows
                                          for finding in row["findings"])
+          from urllib.parse import urlsplit
+          route_summaries = [{"path": urlsplit(row["url"]).path,
+                              "categories": row["categories"],
+                              "observations": [{"action": obs["action"], "status": obs["status"],
+                                                "marker_reflected": obs["marker_reflected"]}
+                                               for obs in row["observations"]],
+                              "findings": [{"kind": finding["kind"], "status": finding["status"]}
+                                           for finding in row["findings"]]}
+                             for row in rows]
           print(json.dumps({"candidates": len(rows),
                             "http_status_counts": dict(sorted(codes.items())),
                             "review_states": dict(sorted(states.items())),
                             "categories": dict(sorted(categories.items())),
-                            "finding_kinds": dict(sorted(findings.items()))}, sort_keys=True))
+                            "finding_kinds": dict(sorted(findings.items())),
+                            "routes": route_summaries}, sort_keys=True))
           PY
       - name: Encrypt observations before uploading
         if: always()
