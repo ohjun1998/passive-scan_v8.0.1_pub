@@ -17,9 +17,9 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.actor == 'ohjun1998'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      CHATGPT_CI_SESSION_DIR: ${{ runner.temp }}/passive-scan-chatgpt
     steps:
+      - name: Set runner session directory
+        run: echo "CHATGPT_CI_SESSION_DIR=$RUNNER_TEMP/passive-scan-chatgpt" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
