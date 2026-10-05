@@ -30,7 +30,9 @@ class OneShotSession:
 
 
 def main():
-    planner = ai_review.ChatGPTPlanner(session=OneShotSession())
+    directory = os.environ.get("CHATGPT_CI_SESSION_DIR")
+    session = chatgpt_auth.ChatGPTSession(directory) if directory else OneShotSession()
+    planner = ai_review.ChatGPTPlanner(session=session)
     print("ChatGPT model selected: " + planner.model, flush=True)
     with tempfile.TemporaryDirectory() as directory:
         output = Path(directory) / "lab_results.jsonl"
