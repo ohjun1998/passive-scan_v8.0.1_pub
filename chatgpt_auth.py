@@ -214,17 +214,25 @@ if __name__ == "__main__":
     import argparse
     import subprocess
     parser = argparse.ArgumentParser(description="Local ChatGPT plan connection")
-    parser.add_argument("command", choices=["login", "models", "ci-secret"])
+    parser.add_argument("command", choices=["login", "models", "ci-secret", "ci-bootstrap"])
     args = parser.parse_args()
     session = ChatGPTSession()
     if args.command == "login":
         print(json.dumps(session.sign_in()))
     elif args.command == "models":
         print("\n".join(session.models()))
-    else:
-        subprocess.run(
-            ["gh", "secret", "set", "CHATGPT_CI_ACCESS_TOKEN", "--repo",
-             "ohjun1998/passive-scan_v8.0.1_pub", "--app", "actions"],
-            input=session.access_token(), text=True, check=True,
-        )
-        print("Temporary ChatGPT access token uploaded to GitHub Actions secret. Run the manual lab now.")
+    else:  # ci-secret remains an alias for the older setup instructions.
+        key_path = session.directory / "ci-key.json"
+        existing_key = _read_private(key_path)
+        if existing_key is None:
+            existing_key = {"key": base64.b64encode(secrets.token_bytes(32)).decode("ascii")}
+            _write_private(key_path, existing_key)
+        record = _read_private(session.session_file)
+        if not record or not record.get("refresh_token"):
+            raise RuntimeError("Run chatgpt_auth.py login before ci-bootstrap")
+        for name, value in (("CHATGPT_CI_KEY", existing_key["key"]),
+                            ("CHATGPT_CI_BOOTSTRAP", json.dumps(record, separators=(",", ":")))):
+            subprocess.run(["gh", "secret", "set", name, "--repo",
+                            "ohjun1998/passive-scan_v8.0.1_pub", "--app", "actions"],
+                           input=value, text=True, check=True)
+        print("Encrypted-session bootstrap uploaded; run the manual GitHub Actions lab.")
