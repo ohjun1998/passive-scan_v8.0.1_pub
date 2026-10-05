@@ -77,11 +77,19 @@ def _verify_id_token(token, client_id, nonce):
     public = rsa.RSAPublicNumbers(number(key["e"]), number(key["n"])).public_key()
     public.verify(decode(signature64), f"{header64}.{payload64}".encode(), padding.PKCS1v15(), hashes.SHA256())
     claims = json.loads(decode(payload64))
-    if (claims.get("iss") != AUTH or claims.get("aud") != client_id
-            or claims.get("nonce") != nonce or not claims.get("sub")
-            or not isinstance(claims.get("exp"), (int, float)) or claims["exp"] <= time.time()
-            or claims.get("nbf", 0) > time.time() + 60):
-        raise RuntimeError("ID token claims did not match this sign-in")
+    audience = claims.get("aud")
+    checks = {
+        "issuer": claims.get("iss") == AUTH,
+        "audience": client_id in audience if isinstance(audience, list) else audience == client_id,
+        "nonce": claims.get("nonce") == nonce,
+        "subject": bool(claims.get("sub")),
+        "expiry": isinstance(claims.get("exp"), (int, float)) and claims["exp"] > time.time(),
+        "not-before": isinstance(claims.get("nbf", 0), (int, float))
+                      and claims.get("nbf", 0) <= time.time() + 60,
+    }
+    failed = [name for name, passed in checks.items() if not passed]
+    if failed:
+        raise RuntimeError("ID token verification failed: " + ", ".join(failed))
     return claims
 
 

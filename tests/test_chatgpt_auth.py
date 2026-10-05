@@ -82,8 +82,10 @@ class ChatGPTTests(unittest.TestCase):
             return {"jwks_uri": chatgpt_auth.AUTH + "/keys"} if url.endswith("openid-configuration") else {"keys": [jwk]}
         with patch("chatgpt_auth._request_json", side_effect=discovery):
             self.assertEqual(chatgpt_auth._verify_id_token(token, "issued-id", "random-nonce")["sub"], "subject")
-            with self.assertRaises(RuntimeError):
+            with self.assertRaisesRegex(RuntimeError, "audience"):
                 chatgpt_auth._verify_id_token(token, "different-id", "random-nonce")
+            with self.assertRaisesRegex(RuntimeError, "nonce"):
+                chatgpt_auth._verify_id_token(token, "issued-id", "different-nonce")
 
 
 if __name__ == "__main__":
