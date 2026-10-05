@@ -167,25 +167,34 @@ the local lab. It verifies the resulting findings without an account or API
 key. It cannot prove interactive ChatGPT login, account permission, live model
 availability, or model behavior: those require a separate local sign-in test.
 
-## One-time real ChatGPT Plus test in GitHub Actions
+## Renewable real ChatGPT Plus test in GitHub Actions
 
 For a manual run against the same **local fake site** on a GitHub-hosted runner:
 
 1. On your own computer, install the optional Python dependencies and sign in
    with `python3 chatgpt_auth.py login`. Install and authenticate GitHub CLI
    (`gh auth login`) if needed.
-2. Run `python3 chatgpt_auth.py ci-secret` on that computer. This passes **only
-   the short-lived access token** through standard input to `gh secret set` for
-   this repository. The refresh token and local credential file stay local.
-3. Immediately open Actions → **ChatGPT Plus local lab (manual)** → **Run workflow**
+2. Run `python3 chatgpt_auth.py ci-bootstrap` on that computer. It registers
+   the initial protected session and a random encryption key as separate
+   Actions Secrets. Both are sent to `gh secret set` over standard input.
+3. Open Actions → **ChatGPT Plus local lab (manual)** → **Run workflow**
    on `main`. It lists available models, runs real streamed model decisions
    against `127.0.0.1:18080` within that runner, and checks that the review
    completed. The model can choose `stop`, so a specific finding is not required.
-4. Remove the temporary secret afterward with
-   `gh secret delete CHATGPT_CI_ACCESS_TOKEN --repo ohjun1998/passive-scan_v8.0.1_pub`.
+4. After the first successful run, remove the initial bootstrap secret with
+   `gh secret delete CHATGPT_CI_BOOTSTRAP --repo ohjun1998/passive-scan_v8.0.1_pub`.
+   **Keep `CHATGPT_CI_KEY`** while you want to reuse the encrypted checkpoint.
 
-The access token normally expires after one hour. If the job starts after
-expiry, repeat step 2. This manual workflow is restricted to repository owner
-dispatches on `main`, runs for at most ten minutes, and never contacts a
-production target. No Plus account credentials are configured in ordinary PR
-or reconnaissance workflows.
+Each run restores the latest AES-GCM-encrypted session artifact, refreshes the
+access token as needed, then uploads a fresh encrypted checkpoint. The
+encryption key remains in Actions Secrets, and each artifact is retained for
+30 days. Runs are serialized to avoid racing the rotating refresh token.
+Ordinary PR and reconnaissance workflows never receive these credentials.
+The old `ci-secret` command remains an alias for `ci-bootstrap`.
+
+If a run does not happen for more than 30 days, the refresh token or artifact
+may expire. If ChatGPT access is revoked, the encryption key is lost, or a run
+stops between token rotation and checkpoint upload, sign in and bootstrap
+again, then choose `reset_session` on the manual workflow. This test still
+only scans the fake local site. GitHub-hosted runners do not preserve local
+files between jobs; the encrypted artifact is the persistent state.
