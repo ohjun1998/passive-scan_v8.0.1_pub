@@ -6,6 +6,10 @@ on:
         description: 'Use newly uploaded bootstrap credentials after reconnecting ChatGPT'
         type: boolean
         default: false
+      force_refresh:
+        description: 'Exercise live token renewal using the restored encrypted session'
+        type: boolean
+        default: false
 permissions:
   contents: read
   actions: write
@@ -32,6 +36,26 @@ jobs:
           CHATGPT_CI_KEY: ${{ secrets.CHATGPT_CI_KEY }}
           CHATGPT_CI_RESET: ${{ inputs.reset_session }}
         run: python ci_session.py restore --directory "$CHATGPT_CI_SESSION_DIR"
+      - name: Verify live token renewal
+        if: inputs.force_refresh
+        run: |
+          python - <<'PY'
+          import os
+          from chatgpt_auth import ChatGPTSession, _read_private, _write_private
+
+          session = ChatGPTSession(os.environ["CHATGPT_CI_SESSION_DIR"])
+          record = _read_private(session.session_file)
+          if not record:
+              raise RuntimeError("No restored session")
+          previous_refresh_token = record["refresh_token"]
+          record["expires_at"] = 0
+          _write_private(session.session_file, record)
+          session.access_token()
+          renewed = _read_private(session.session_file)
+          if renewed["refresh_token"] == previous_refresh_token:
+              raise RuntimeError("Refresh token did not rotate")
+          print("Live ChatGPT token renewal and rotation completed")
+          PY
       - run: python tests/lab_chatgpt_ci.py
       - name: Encrypt latest session for the next run
         if: always()
