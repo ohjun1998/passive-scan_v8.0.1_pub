@@ -75,8 +75,8 @@ The first listed model is selected by default. To choose another, set
 `chatgpt_model` in the local JSON config to a slug printed by `models`.
 The credentials and stable host ID live in owner-only files in
 `~/.config/passive-scan-review/`. Keep this directory and the JSONL output
-private. Refresh tokens are rotated automatically. This login is only for
-local use; the separate GitHub Actions workflow continues to use its API key.
+private. Refresh tokens are rotated automatically. The optional GitHub Actions review can also use the protected ChatGPT session
+when you explicitly select `chatgpt` authentication.
 ChatGPT plan usage has its own limits and is not an unlimited six-hour batch
 quota. The application never obtains your ChatGPT conversation history.
 
@@ -131,21 +131,36 @@ you own**, including an innocuous marker known in advance and a rule that
 other-account access should be denied. A second 200 response alone is not
 reported as an access-control vulnerability.
 
-Existing v8.0.1 scan speed is unaffected: this script is intentionally not
-called from `passive_recon.yml`. GPT/API availability and an actual production
-bug-bounty run have not been verified in this deliverable.
+The full reconnaissance workflow offers an opt-in `plus_review` switch. When
+selected on `main` by the repository owner, it runs the bounded live review
+after the secured report is uploaded. No production target run is implied by
+the local lab.
 
-## Optional GitHub Actions run
+## Optional GitHub Actions review
 
-The separate `Bounded GPT review of a passive recon run` workflow accepts the
-completed recon run ID and has `live=false` by default. Store the contents of
-your edited JSON config in the `AI_REVIEW_CONFIG_JSON` Actions secret; add
-`OPENAI_API_KEY`, `ACTIONS_CRYPTO_PASSWORD`, and optional account token secrets
-only where needed. Run it from Actions after the recon workflow completes. It
-downloads the **specified** report, reads the SQLite URL list, and uploads
-encrypted review results as `bounded-ai-review-secured`. It never commits
-scan data or credentials to the repository. The optional live toggle requires
-the exact hosts and `live_path_prefixes` already configured in the secret.
+Set `AI_REVIEW_CONFIG_JSON` to an edited JSON policy with exact
+`allowed_hosts` and nonempty `live_path_prefixes`. Set
+`ACTIONS_CRYPTO_PASSWORD` to the password protecting the recon report. Add
+own test-account token secrets only if their checks are explicitly approved.
+For API-key live mode, also set `OPENAI_API_KEY`.
+
+The manual **Bounded GPT review of a passive recon run** workflow takes a
+completed recon run ID, defaults to offline planning, and offers `api-key` or
+`chatgpt` authentication. `chatgpt` live review uses the encrypted session
+checkpoint established by the separate Plus lab. It restores the latest
+checkpoint, selects permitted model actions, then saves a newly encrypted
+checkpoint even if review fails after restoration. Both workflows serialize
+access to the rotating token. The results are encrypted in the
+`bounded-ai-review-secured` artifact.
+
+Alternatively, choose `full` and enable `plus_review` when manually running
+**Automated Parallel Passive Reconnaissance** on `main`. Its report job must
+succeed before the Plus review starts. The switch is off by default and the
+workflow's schedule is currently disabled. Ensure the target policy and the
+recon workflow's own target secrets are configured before running it. The
+review reads historical URLs from the report, filters them to the exact hosts
+and approved path prefixes, and makes only its bounded GET requests. It does
+not commit scan data or credentials.
 
 ## Repeatable local HTTP lab
 
@@ -189,7 +204,8 @@ Each run restores the latest AES-GCM-encrypted session artifact, refreshes the
 access token as needed, then uploads a fresh encrypted checkpoint. The
 encryption key remains in Actions Secrets, and each artifact is retained for
 30 days. Runs are serialized to avoid racing the rotating refresh token.
-Ordinary PR and reconnaissance workflows never receive these credentials.
+PR jobs do not run a live Plus review; the opt-in full reconnaissance run
+can pass the protected credentials to its review job.
 The old `ci-secret` command remains an alias for `ci-bootstrap`.
 
 If a run does not happen for more than 30 days, the refresh token or artifact
