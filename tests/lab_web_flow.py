@@ -20,7 +20,8 @@ from web_lab_site import serve
 
 class ReadOnlyPlanner:
     def choose(self, url, available, observations):
-        action = ("reflection" if "reflection" in available else "anonymous")
+        action = ("stop" if observations else
+                  "reflection" if "reflection" in available else "anonymous")
         return {"action": action, "reason": "Deterministic local site check"}
 
 
