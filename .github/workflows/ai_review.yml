@@ -147,9 +147,14 @@ jobs:
           codes = collections.Counter(str(obs["status"]) for row in rows
                                       for obs in row["observations"])
           states = collections.Counter(row["state"] for row in rows)
+          categories = collections.Counter(kind for row in rows for kind in row["categories"])
+          findings = collections.Counter(finding["kind"] for row in rows
+                                         for finding in row["findings"])
           print(json.dumps({"candidates": len(rows),
                             "http_status_counts": dict(sorted(codes.items())),
-                            "review_states": dict(sorted(states.items()))}, sort_keys=True))
+                            "review_states": dict(sorted(states.items())),
+                            "categories": dict(sorted(categories.items())),
+                            "finding_kinds": dict(sorted(findings.items()))}, sort_keys=True))
           PY
       - name: Encrypt observations before uploading
         if: always()
