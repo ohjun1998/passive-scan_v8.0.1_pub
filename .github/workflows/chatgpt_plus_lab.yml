@@ -6,6 +6,10 @@ on:
         description: 'Use newly uploaded bootstrap credentials after reconnecting ChatGPT'
         type: boolean
         default: false
+      interactive_site:
+        description: 'Run the login, recovery, board and comment lab'
+        type: boolean
+        default: true
       force_refresh:
         description: 'Exercise live token renewal using the restored encrypted session'
         type: boolean
@@ -57,6 +61,11 @@ jobs:
           print("Live ChatGPT token renewal and rotation completed")
           PY
       - run: python tests/lab_chatgpt_ci.py
+      - name: Exercise interactive local web app
+        if: inputs.interactive_site
+        run: |
+          python tests/lab_web_flow.py --output "$RUNNER_TEMP/web-lab-fixed.jsonl"
+          python tests/lab_web_flow.py --chatgpt --output "$RUNNER_TEMP/web-lab-plus.jsonl"
       - name: Encrypt latest session for the next run
         if: always()
         env:
