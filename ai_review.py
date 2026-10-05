@@ -407,7 +407,12 @@ def main():
     urls = load_urls(config, args.db, args.urls_file)
     if args.live and args.auth == "api-key" and not os.environ.get("OPENAI_API_KEY"):
         parser.error("OPENAI_API_KEY is required for --live")
-    planner = (ChatGPTPlanner(config.get("chatgpt_model")) if args.auth == "chatgpt" else
+    session_dir = os.environ.get("CHATGPT_CI_SESSION_DIR")
+    session = None
+    if args.live and args.auth == "chatgpt" and session_dir:
+        from chatgpt_auth import ChatGPTSession
+        session = ChatGPTSession(session_dir)
+    planner = (ChatGPTPlanner(config.get("chatgpt_model"), session=session) if args.auth == "chatgpt" else
                GptPlanner(config.get("model", "gpt-5.4"))) if args.live else None
     result = run(config, urls, planner, HttpClient(policy, credentials), args.output, args.live)
     print(json.dumps(result, ensure_ascii=False))

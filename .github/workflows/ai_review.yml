@@ -12,20 +12,43 @@ on:
         required: true
         default: false
         type: boolean
+      auth:
+        description: 'Model authentication for live review'
+        required: true
+        default: api-key
+        type: choice
+        options:
+          - api-key
+          - chatgpt
+  workflow_call:
+    inputs:
+      source_run_id:
+        required: true
+        type: string
+      live:
+        required: true
+        type: boolean
+      auth:
+        required: true
+        type: string
 
 permissions:
   contents: read
-  actions: read
+  actions: write
 
 concurrency:
-  group: bounded-ai-review-${{ github.repository }}
+  group: chatgpt-plus-session
   cancel-in-progress: false
 
 jobs:
   review:
+    if: inputs.auth != 'chatgpt' || !inputs.live || (github.ref == 'refs/heads/main' && github.actor == 'ohjun1998')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      - name: Set runner session directory
+        if: inputs.live && inputs.auth == 'chatgpt'
+        run: echo "CHATGPT_CI_SESSION_DIR=$RUNNER_TEMP/passive-scan-chatgpt" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
@@ -47,21 +70,53 @@ jobs:
           python3 -c 'import os, pathlib; pathlib.Path("ai_review.config.json").write_text(os.environ["REVIEW_CONFIG"], encoding="utf-8")'
           mkdir -p source_report/decrypted
           unzip -q -P "$REPORT_PASSWORD" source_report/passive_recon_report_secured.zip recon_history.db -d source_report/decrypted
-      - name: Install GPT API dependency
+      - name: Install GPT dependency
         if: inputs.live
-        run: python3 -m pip install openai
+        run: python3 -m pip install openai cryptography
+      - name: Restore protected ChatGPT session
+        id: restore_session
+        if: inputs.live && inputs.auth == 'chatgpt'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHATGPT_CI_BOOTSTRAP: ${{ secrets.CHATGPT_CI_BOOTSTRAP }}
+          CHATGPT_CI_KEY: ${{ secrets.CHATGPT_CI_KEY }}
+        run: python3 ci_session.py restore --directory "$CHATGPT_CI_SESSION_DIR"
       - name: GPT review or offline plan
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           REVIEW_ACCOUNT_A_TOKEN: ${{ secrets.REVIEW_ACCOUNT_A_TOKEN }}
           REVIEW_ACCOUNT_B_TOKEN: ${{ secrets.REVIEW_ACCOUNT_B_TOKEN }}
           LIVE_MODE: ${{ inputs.live }}
+          REVIEW_AUTH: ${{ inputs.auth }}
         run: |
           if [ "$LIVE_MODE" = true ]; then
-            python3 ai_review.py --config ai_review.config.json --db source_report/decrypted/recon_history.db --output ai_review_results.jsonl --live
+            python3 ai_review.py --config ai_review.config.json --db source_report/decrypted/recon_history.db --output ai_review_results.jsonl --auth "$REVIEW_AUTH" --live
           else
-            python3 ai_review.py --config ai_review.config.json --db source_report/decrypted/recon_history.db --output ai_review_results.jsonl
+            python3 ai_review.py --config ai_review.config.json --db source_report/decrypted/recon_history.db --output ai_review_results.jsonl --auth "$REVIEW_AUTH"
           fi
+      - name: Encrypt latest ChatGPT session
+        if: always() && steps.restore_session.outcome == 'success'
+        env:
+          CHATGPT_CI_KEY: ${{ secrets.CHATGPT_CI_KEY }}
+        run: python3 ci_session.py checkpoint --directory "$CHATGPT_CI_SESSION_DIR" --output "$RUNNER_TEMP/chatgpt-checkpoint/session.enc"
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.restore_session.outcome == 'success'
+        with:
+          name: chatgpt-ci-session
+          path: ${{ runner.temp }}/chatgpt-checkpoint/session.enc
+          if-no-files-found: error
+          retention-days: 30
+      - name: Verify live Plus review completed
+        if: inputs.live && inputs.auth == 'chatgpt'
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          reports = [json.loads(line) for line in Path("ai_review_results.jsonl").read_text().splitlines()]
+          if not reports or any(r["state"] in ("model_unavailable", "request_error") for r in reports):
+              raise SystemExit("Plus review has no candidates or encountered a model/request error")
+          print(f"Plus review processed {len(reports)} candidate(s)")
+          PY
       - name: Encrypt observations before uploading
         if: always()
         env:

@@ -16,6 +16,10 @@ on:
         description: '전체 검사 후 브라우저 캡처 실행 (페이지 스크립트와 추가 요청 발생)'
         type: boolean
         default: false
+      plus_review:
+        description: '전체 검사 보고서로 범위 제한된 ChatGPT Plus GET 검토 실행'
+        type: boolean
+        default: false
   #schedule:
     #- cron: '17 19 * * *'
     #- cron: '17 7 * * *'
@@ -768,3 +772,16 @@ jobs:
       env:
         DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
       run: python upload_to_discord.py || true
+
+  bounded-plus-review:
+    needs: excel-reporter
+    if: ${{ inputs.mode == 'full' && inputs.plus_review && github.ref == 'refs/heads/main' && github.actor == 'ohjun1998' && needs.excel-reporter.result == 'success' }}
+    permissions:
+      contents: read
+      actions: write
+    uses: ./.github/workflows/ai_review.yml
+    with:
+      source_run_id: ${{ github.run_id }}
+      live: true
+      auth: chatgpt
+    secrets: inherit

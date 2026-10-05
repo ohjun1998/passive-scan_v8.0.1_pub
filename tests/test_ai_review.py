@@ -153,6 +153,20 @@ class AiReviewTests(unittest.TestCase):
         self.assertNotIn("private-value", arguments["input"])
         self.assertFalse(arguments["store"])
 
+    def test_live_chatgpt_uses_restored_ci_session_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory, "policy.json")
+            config.write_text(json.dumps(self.config))
+            with patch("sys.argv", ["ai_review.py", "--config", str(config),
+                                    "--auth", "chatgpt", "--live"]), \
+                 patch.dict("os.environ", {"CHATGPT_CI_SESSION_DIR": directory}), \
+                 patch("chatgpt_auth.ChatGPTSession") as session_class, \
+                 patch("ai_review.ChatGPTPlanner") as planner_class, \
+                 patch("ai_review.run", return_value={"candidates": 1, "requests": 0}):
+                ai_review.main()
+            session_class.assert_called_once_with(directory)
+            planner_class.assert_called_once_with(None, session=session_class.return_value)
+
     def test_response_preview_redacts_common_secrets(self):
         redacted = ai_review.sanitize('{"password":"hunter2","token":"abc123","email":"person@example.test"}')
         self.assertNotIn("hunter2", redacted)
