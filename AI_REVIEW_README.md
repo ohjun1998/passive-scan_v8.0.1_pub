@@ -214,3 +214,19 @@ stops between token rotation and checkpoint upload, sign in and bootstrap
 again, then choose `reset_session` on the manual workflow. This test still
 only scans the fake local site. GitHub-hosted runners do not preserve local
 files between jobs; the encrypted artifact is the persistent state.
+
+## Interactive local web lab
+
+`python3 tests/lab_web_flow.py` starts an ephemeral HTTP site on
+`127.0.0.1` with synthetic Alice/Bob accounts. It exercises login, a one-time
+password reset, post creation, comments and HTML escaping, then writes five
+GET URLs to a temporary `recon_history.db` and passes them through the real
+bounded reviewer. The default fixed planner checks all five HTTP candidates.
+No account or external target is needed.
+
+The manual **ChatGPT Plus local lab** workflow can additionally run this site
+with the restored Plus session by leaving `interactive_site` enabled. The site
+is reachable only inside that one runner. Its account data and SQLite report
+are temporary; it is not a public domain and does not run the 20-worker
+reconnaissance workflow. A public end-to-end scan needs a separately owned
+public hostname and hosting arrangement.
