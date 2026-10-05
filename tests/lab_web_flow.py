@@ -66,7 +66,7 @@ def run_lab(output, planner=None):
             conn.executemany("INSERT INTO master_urls (url) VALUES (?)",
                              [(base + path,) for path in paths])
         config = {"allowed_hosts": ["127.0.0.1"], "live_path_prefixes": ["/"],
-                  "max_urls": 5, "max_http_requests": 5, "min_seconds_per_host": 1}
+                  "max_urls": 5, "max_http_requests": 6, "min_seconds_per_host": 1}
         policy = ai_review.Policy(config, allow_private_lab=True)
         session_dir = os.environ.get("CHATGPT_CI_SESSION_DIR")
         active_planner = planner
@@ -83,6 +83,8 @@ def run_lab(output, planner=None):
                                (row["url"], row["state"], row.get("error")) for row in rows]}))
     if planner is None and summary["requests"] != 5:
         raise RuntimeError("Expected one real GET per discovered candidate")
+    if planner is not None and summary["requests"] == 0:
+        raise RuntimeError("Plus planner made no GET requests to the local site")
     print(json.dumps({"site": "loopback-only", "features": [
         "login", "password reset", "board", "comments", "search"],
         "candidates": summary["candidates"], "http_requests": summary["requests"],
