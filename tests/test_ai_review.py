@@ -58,6 +58,8 @@ class AiReviewTests(unittest.TestCase):
         self.assertEqual(result["requests"], 0)
         self.assertEqual(report["state"], "dry_run")
         self.assertEqual(report["categories"], ["object_access"])
+        self.assertEqual(report["hypotheses"][0]["status"], "not_tested")
+        self.assertEqual(report["facts"], [])
         planner.choose.assert_not_called()
 
     def test_repeated_id_routes_are_sampled_once(self):
@@ -85,6 +87,11 @@ class AiReviewTests(unittest.TestCase):
         self.assertEqual(result["requests"], 2)
         self.assertTrue(planner.contexts[1][0]["marker_present"])
         self.assertEqual(report["findings"][0]["status"], "manual_review")
+        self.assertEqual(report["findings"][0]["evidence_ids"], ["obs-1", "obs-2"])
+        self.assertEqual(report["hypotheses"][0]["status"], "needs_manual_review")
+        self.assertEqual([fact["confidence"] for fact in report["facts"]], ["observed", "observed"])
+        self.assertEqual([plan["confidence"] for plan in report["plans"]], ["inferred"] * 3)
+        self.assertEqual(report["facts"][0]["body_sha256"], report["observations"][0]["body_sha256"])
         self.assertNotIn("secret-a", json.dumps(report))
         self.assertEqual(opener.open.call_args_list[0].args[0].get_method(), "GET")
 
@@ -105,6 +112,23 @@ class AiReviewTests(unittest.TestCase):
         self.assertTrue(observation["marker_reflected"])
         self.assertEqual(finding["kind"], "reflected_input")
         self.assertEqual(finding["status"], "manual_review")
+        self.assertEqual(finding["evidence_ids"], ["obs-1"])
+
+    def test_no_marker_and_no_owner_baseline_never_create_finding(self):
+        expected = self.config["expectations"][self.url]
+        observations = [{"action": "b", "status": 200, "marker_present": True}]
+        self.assertEqual(ai_review.assess(observations, expected), [])
+        hypotheses = ai_review.hypotheses_for(self.url, expected)
+        ai_review.update_hypotheses(hypotheses, observations, [], expected)
+        self.assertEqual(hypotheses[0]["status"], "not_tested")
+        search = ai_review.hypotheses_for("https://example.test/search?q=old", {})
+        ai_review.update_hypotheses(search, [{"action": "reflection", "status": 200,
+                                              "marker_reflected": False}], [], {})
+        self.assertEqual(search[0]["status"], "no_signal_observed")
+        failed_search = ai_review.hypotheses_for("https://example.test/search?q=old", {})
+        ai_review.update_hypotheses(failed_search, [{"action": "reflection", "status": 503,
+                                                     "marker_reflected": False}], [], {})
+        self.assertEqual(failed_search[0]["status"], "not_tested")
 
     def test_scope_redirect_and_stop_signal(self):
         policy = ai_review.Policy(self.config)
