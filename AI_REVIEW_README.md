@@ -12,10 +12,11 @@ only on targets where program rules explicitly allow the selected traffic.
    recognizable API and search paths and samples one URL per route pattern.
 2. Uses a hard cap on URL count, an exact host allowlist, explicit live path
    prefixes, and path exclusions.
-3. In live mode, asks GPT which of a small number of allowed checks to do next.
-   It returns the bounded, redacted HTTP response observation to GPT and may
-   choose a follow-up check. Model output cannot select arbitrary URLs, HTTP
-   methods, headers, account tokens, or payloads.
+3. In live mode, the global planner sees the selected URL assets, prior
+   observed facts, manual-review candidates and progress. It chooses one
+   available URL/check pair; the bounded worker executes it, records the
+   response, and the planner decides again. Model output cannot select
+   arbitrary URLs, HTTP methods, headers, account tokens, or payloads.
 4. Saves JSON Lines containing status, a redacted response preview and body
    hash. An observed reflected marker or cross-account exposure of a marker in
    your **own test object** is a `manual_review` candidate, never an
@@ -67,6 +68,17 @@ Only the configured test identity can be used, with a token supplied through
 the existing credential environment mapping. It neither fetches the uploaded
 file nor treats an accepted upload as a vulnerability. A different form
 schema or upload destination needs an explicit test definition.
+
+Global planning is on by default for a live run. It sees a compact asset
+inventory of the URLs selected from reconnaissance, the last 100 observed
+facts with per-URL evidence IDs, current manual-review candidates, which
+checks have been attempted, and remaining available actions. It does not
+have the entire reconnaissance database or a complete authenticated request
+history. Every response updates the shared situation before the next model
+decision. The model can stop; untouched URLs remain `not_selected`, never
+`safe`. `max_planning_steps` defaults to 20 and cannot exceed the HTTP
+request budget. To compare with the previous per-URL loop, explicitly set
+`"adaptive_planning": false` in a local config.
 
 Model output cannot change the configured URL, parameter, field, method,
 headers, or payload. No configured POST action runs unless `upload` is in
