@@ -170,8 +170,13 @@ for tooling. Extract the HTML to a private location before opening it;
 the archive and extracted files contain target details and response previews.
 You can still decrypt the GPG file with GnuPG on a computer. Never use the
 GitHub account password or ChatGPT password for either archive. Existing runs
-created before this report change only contain the GPG file; run the updated
-workflow again to generate a readable ZIP. Artifacts are retained for 7 days.
+created before this report change only contain the GPG file. To export one
+without another target request or model call, open Actions → **Export an
+existing bounded review as a readable report** → **Run workflow** on `main`
+and enter that completed bounded review run's ID as `review_run_id`. Its
+summary contains the candidate table, and its `bounded-ai-review-readable`
+artifact contains the AES-256 ZIP described above. The original GPG artifact
+must still be available, and both result artifact types are retained for 7 days.
 
 Alternatively, choose `full` and enable `plus_review` when manually running
 **Automated Parallel Passive Reconnaissance** on `main`. Its report job must
