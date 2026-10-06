@@ -18,6 +18,19 @@ HYPOTHESES = {"not_tested": "미검증", "needs_manual_review": "수동 확인 �
               "no_signal_observed": "신호 관찰되지 않음"}
 ACTIONS = {"anonymous": "비로그인", "a": "계정 A", "b": "계정 B",
            "reflection": "반사 확인", "stop": "중단"}
+HYPOTHESIS_TEXT = {
+    "reflected_input": ("무해한 검색 표식이 응답에 나타나는가?",
+                        "반사만으로 스크립트 실행 여부를 판단할 수 없습니다."),
+    "access_control": ("다른 계정에서 소유자의 테스트 객체 표식을 읽을 수 있는가?",
+                       "테스트 객체의 공유 정책은 사람이 확인해야 합니다."),
+}
+FINDING_TEXT = {
+    "reflected_input": "무해한 표식의 반사가 관찰됐습니다. 스크립트 실행 여부는 확인하지 않았습니다.",
+    "access_control": "다른 신원에도 소유자의 테스트 표식이 반환됐습니다. 의도한 공유 정책을 확인하세요.",
+}
+PLAN_TEXT = {"anonymous": "비로그인 상태의 응답 확인", "a": "계정 A의 응답 확인",
+             "b": "계정 B의 응답 확인", "reflection": "검색 표식의 반사 확인",
+             "stop": "추가 요청 중단"}
 
 
 def load_rows(path):
@@ -139,11 +152,12 @@ def detail_html(row, number, total):
 
     hypotheses = [f'<strong>{escape(FINDINGS.get(x.get("kind"), "기타"))}</strong> '
                   f'<span class="badge">{escape(HYPOTHESES.get(x.get("status"), "상태 미상"))}</span>'
-                  f'<div class="sub">질문 원문: {escape(x.get("question", ""))}</div>'
-                  f'<div class="sub">판단 한계 원문: {escape(x.get("limit", ""))}</div>'
+                  f'<div>{escape(HYPOTHESIS_TEXT.get(x.get("kind"), ("검토 가설의 원문을 확인하세요.", ""))[0])}</div>'
+                  f'<div class="sub">{escape(HYPOTHESIS_TEXT.get(x.get("kind"), ("", ""))[1])}</div>'
+                  f'<details class="sub"><summary>가설 원문</summary>{escape(x.get("question", ""))}<br>{escape(x.get("limit", ""))}</details>'
                   for x in row.get("hypotheses", [])]
-    plans = [f'<strong>{escape(ACTIONS.get(x.get("action"), "기타"))}</strong> · 모델 추론'
-             f'<div class="sub">선택 이유 원문: {escape(x.get("question", ""))}</div>'
+    plans = [f'<strong>{escape(PLAN_TEXT.get(x.get("action"), "기타 계획"))}</strong> · 모델 추론'
+             f'<details class="sub"><summary>모델 선택 이유 원문</summary>{escape(x.get("question", ""))}</details>'
              for x in row.get("plans", [])]
     facts = [f'<a class="evidence" href="#{escape(x.get("evidence_id", ""))}">{escape(x.get("evidence_id", ""))}</a> '
              f'{escape(ACTIONS.get(x.get("action"), "기타"))} · HTTP {escape(x.get("http_status", ""))}'
@@ -151,7 +165,8 @@ def detail_html(row, number, total):
              for x in row.get("facts", [])]
     findings = [f'<strong>{escape(FINDINGS.get(x.get("kind"), "기타"))}</strong> '
                 '<span class="badge warn">수동 확인 필요</span>'
-                f'<div class="sub">판단 근거 원문: {escape(x.get("reason", ""))}</div>'
+                f'<div>{escape(FINDING_TEXT.get(x.get("kind"), "판단 근거 원문을 확인하세요."))}</div>'
+                f'<details class="sub"><summary>판단 근거 원문</summary>{escape(x.get("reason", ""))}</details>'
                 '<div class="sub">연결된 증거: ' + (", ".join(
                     f'<a href="#{escape(evidence_id)}">{escape(evidence_id)}</a>'
                     for evidence_id in x.get("evidence_ids", [])) or "연결 없음") + '</div>'
