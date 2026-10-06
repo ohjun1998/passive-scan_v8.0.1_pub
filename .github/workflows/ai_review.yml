@@ -166,6 +166,32 @@ jobs:
                             "finding_kinds": dict(sorted(findings.items())),
                             "routes": route_summaries}, sort_keys=True))
           PY
+      - name: Summarize current review without exposing URLs
+        if: inputs.live
+        run: |
+          python3 - <<'PY'
+          import collections
+          import json
+          import os
+          from pathlib import Path
+
+          rows = [json.loads(line) for line in Path("ai_review_results.jsonl").read_text().splitlines()]
+          states = collections.Counter(row["state"] for row in rows)
+          statuses = collections.Counter(str(obs["status"]) for row in rows for obs in row["observations"])
+          findings = collections.Counter(item["kind"] for row in rows for item in row["findings"])
+          summary = {"candidates": len(rows), "review_states": dict(sorted(states.items())),
+                     "http_status_counts": dict(sorted(statuses.items())),
+                     "finding_kinds": dict(sorted(findings.items()))}
+          print(json.dumps(summary, sort_keys=True))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as stream:
+              stream.write("## Bounded review summary\\n\\n")
+              stream.write("| Metric | Count |\\n| --- | ---: |\\n")
+              stream.write(f"| Candidates | {len(rows)} |\\n")
+              for label, values in (("State", states), ("HTTP", statuses), ("Manual review", findings)):
+                  for key, count in sorted(values.items()):
+                      stream.write(f"| {label}: {key} | {count} |\\n")
+              stream.write("\\nFindings require manual confirmation.\\n")
+          PY
       - name: Encrypt observations before uploading
         if: always()
         env:
