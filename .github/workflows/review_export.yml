@@ -1,0 +1,47 @@
+name: Export an existing bounded review as a readable report
+
+on:
+  workflow_dispatch:
+    inputs:
+      review_run_id:
+        description: 'Completed bounded GPT review run ID containing bounded-ai-review-secured'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  export:
+    if: github.ref == 'refs/heads/main' && github.actor == 'ohjun1998'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: bounded-ai-review-secured
+          run-id: ${{ inputs.review_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: previous_review
+      - name: Decrypt existing result and build protected HTML
+        env:
+          REPORT_PASSWORD: ${{ secrets.ACTIONS_CRYPTO_PASSWORD }}
+        run: |
+          test -n "$REPORT_PASSWORD"
+          umask 077
+          printf %s "$REPORT_PASSWORD" | gpg --decrypt --batch --yes --passphrase-fd 0 \
+            --output "$RUNNER_TEMP/ai_review_results.jsonl" previous_review/ai_review_results.jsonl.gpg
+          python3 -m pip install pyzipper==0.3.6
+          python3 review_report.py --input "$RUNNER_TEMP/ai_review_results.jsonl" \
+            --summary "$GITHUB_STEP_SUMMARY" --archive bounded-ai-review-readable.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bounded-ai-review-readable
+          path: bounded-ai-review-readable.zip
+          if-no-files-found: error
+          retention-days: 7
