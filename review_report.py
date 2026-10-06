@@ -52,21 +52,38 @@ def readable_html(rows):
     escape = lambda value: html.escape(str(value), quote=True)
     cards = []
     for number, row in enumerate(rows, 1):
+        hypotheses = "".join("<li><strong>{}</strong> — {}<br>{}<br><small>{}</small></li>".format(
+            escape(item.get("kind", "")), escape(item.get("status", "")),
+            escape(item.get("question", "")), escape(item.get("limit", "")))
+            for item in row.get("hypotheses", [])) or "<li>None recorded</li>"
+        plans = "".join("<li>{}: {} <small>(model inference)</small></li>".format(
+            escape(item.get("action", "")), escape(item.get("question", "")))
+            for item in row.get("plans", [])) or "<li>None recorded</li>"
+        facts = "".join("<li><strong>{}</strong> — {} / HTTP {}, SHA-256 <code>{}</code></li>".format(
+            escape(item.get("evidence_id", "")), escape(item.get("action", "")),
+            escape(item.get("http_status", "")), escape(item.get("body_sha256", "")))
+            for item in row.get("facts", [])) or "<li>None recorded</li>"
         observations = "".join(
-            "<tr><td>{}</td><td>{}</td><td>{}</td><td><pre>{}</pre></td></tr>".format(
+            "<tr><td>obs-{}</td><td>{}</td><td>{}</td><td>{}</td><td><pre>{}</pre></td></tr>".format(
+                index,
                 escape(obs.get("action", "")), escape(obs.get("status", "")),
                 escape("yes" if obs.get("marker_reflected") else "no"),
-                escape(obs.get("preview", ""))) for obs in row.get("observations", []))
-        findings = "".join("<li><strong>{}</strong> ({}) — {}</li>".format(
+                escape(obs.get("preview", ""))) for index, obs in enumerate(row.get("observations", []), 1))
+        findings = "".join("<li><strong>{}</strong> ({}) — {}. Evidence: {}</li>".format(
             escape(item.get("kind", "")), escape(item.get("status", "")),
-            escape(item.get("reason", ""))) for item in row.get("findings", [])) or "<li>None</li>"
+            escape(item.get("reason", "")),
+            escape(", ".join(item.get("evidence_ids", [])) or "not linked"))
+            for item in row.get("findings", [])) or "<li>None</li>"
         cards.append("<section><h2>Candidate {}</h2><p><strong>URL:</strong> <code>{}</code></p>"
                      "<p><strong>State:</strong> {} · <strong>Categories:</strong> {}</p>"
-                     "<h3>Findings</h3><ul>{}</ul><h3>Observations</h3>"
-                     "<table><thead><tr><th>Action</th><th>HTTP</th><th>Marker reflected</th>"
-                     "<th>Response preview</th></tr></thead><tbody>{}</tbody></table></section>".format(
+                     "<h3>Hypotheses</h3><ul>{}</ul><h3>Model plans</h3><ul>{}</ul>"
+                     "<h3>Observed facts</h3><ul>{}</ul><h3>Manual review candidates</h3><ul>{}</ul>"
+                     "<h3>Observations</h3><table><thead><tr><th>Evidence ID</th><th>Action</th>"
+                     "<th>HTTP</th><th>Marker reflected</th><th>Response preview</th>"
+                     "</tr></thead><tbody>{}</tbody></table></section>".format(
                          number, escape(row.get("url", "")), escape(row.get("state", "")),
-                         escape(", ".join(row.get("categories", []))), findings, observations))
+                         escape(", ".join(row.get("categories", []))), hypotheses, plans,
+                         facts, findings, observations))
     return ("<!doctype html><html lang=\"ko\"><head><meta charset=\"utf-8\">"
             "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
             "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'\">"
