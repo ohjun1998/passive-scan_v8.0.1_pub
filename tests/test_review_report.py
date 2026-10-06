@@ -27,7 +27,7 @@ class ReviewReportTests(unittest.TestCase):
                                  "preview": "<img src=x onerror=alert(1)>", "marker_reflected": True}],
                "findings": [{"kind": "reflected_input", "status": "manual_review",
                              "reason": "<script>alert(1)</script>"}]}
-        report = review_report.detail_html(row, 1, 1)
+        report = review_report.readable_html([row])
         self.assertIn("&lt;img src=x onerror=alert(1)&gt;", report)
         self.assertIn("q=&lt;script&gt;alert(1)&lt;/script&gt;", report)
         self.assertNotIn("<script>", report)
@@ -45,27 +45,31 @@ class ReviewReportTests(unittest.TestCase):
                                  "marker_reflected": False}],
                "findings": [{"kind": "access_control", "status": "manual_review",
                              "reason": "Other identity saw marker", "evidence_ids": ["obs-1"]}]}
-        report = review_report.detail_html(row, 1, 1)
+        report = review_report.readable_html([row])
         self.assertIn("Can B read A&#x27;s test object?", report)
-        self.assertIn('href="#obs-1"', report)
-        self.assertIn('id="obs-1"', report)
+        self.assertIn('href="#candidate-001-obs-1"', report)
+        self.assertIn('id="candidate-001-obs-1"', report)
         self.assertIn("응답 SHA-256: <code>abc</code>", report)
 
-    def test_dashboard_links_to_each_detail_and_back_without_exposing_other_previews(self):
+    def test_single_html_has_dashboard_and_isolated_detail_sections(self):
         rows = [{"url": f"https://lab.test/page/{i}", "state": "completed",
                  "categories": ["basic_response"], "observations": [
                      {"action": "anonymous", "status": 200, "preview": f"secret-{i}"}],
                  "findings": []} for i in range(1, 3)]
         dashboard = review_report.readable_html(rows)
-        self.assertIn('href="pages/candidate-001.html"', dashboard)
-        self.assertIn('href="pages/candidate-002.html"', dashboard)
+        self.assertIn('href="#candidate-001"', dashboard)
+        self.assertIn('href="#candidate-002"', dashboard)
         self.assertIn("메인 대시보드", dashboard)
-        self.assertNotIn("secret-1", dashboard)
-        detail = review_report.detail_html(rows[0], 1, 2)
+        self.assertIn('id="dashboard"', dashboard)
+        self.assertIn('id="candidate-001"', dashboard)
+        self.assertIn('id="candidate-002"', dashboard)
+        self.assertIn(".detail-page:has(:target){display:block}", dashboard)
+        self.assertNotIn("secret-1", dashboard.split('</main>', 1)[0])
+        detail = review_report.detail_section(rows[0], 1, 2)
         self.assertIn("secret-1", detail)
         self.assertNotIn("secret-2", detail)
-        self.assertIn('href="../review_report.html"', detail)
-        self.assertIn('href="candidate-002.html"', detail)
+        self.assertIn('href="#dashboard"', detail)
+        self.assertIn('href="#candidate-002"', detail)
 
     def test_encrypted_zip_round_trip_and_wrong_password(self):
         try:
@@ -80,13 +84,12 @@ class ReviewReportTests(unittest.TestCase):
             source.write_text(json.dumps(row) + "\n")
             review_report.archive([row], source, target, "test-password")
             with pyzipper.AESZipFile(target) as stream:
-                self.assertEqual(stream.namelist(), ["review_report.html", "pages/candidate-001.html",
-                                                     "ai_review_results.jsonl"])
+                self.assertEqual(stream.namelist(), ["review_report.html", "ai_review_results.jsonl"])
                 with self.assertRaises(RuntimeError):
                     stream.read("ai_review_results.jsonl", pwd=b"wrong-password")
                 self.assertEqual(stream.read("ai_review_results.jsonl", pwd=b"test-password"),
                                  source.read_bytes())
-                self.assertIn(b'pages/candidate-001.html',
+                self.assertIn(b'id="candidate-001"',
                               stream.read("review_report.html", pwd=b"test-password"))
 
 

@@ -187,9 +187,10 @@ For full evidence, download the `bounded-ai-review-secured` artifact. The
 downloaded outer ZIP contains `bounded-ai-review-readable.zip` (AES-256) and
 the original `ai_review_results.jsonl.gpg`. Open the inner ZIP with an
 AES-encrypted-ZIP-capable archive app using the `ACTIONS_CRYPTO_PASSWORD`
-value. Extract the entire inner ZIP to a private location, preserving its
-`pages/` directory. Open `review_report.html` in a browser for the Korean
-dashboard, then choose a page to view its individual HTML report. The
+value. Extract the inner ZIP to a private location and open the single
+`review_report.html` in a browser. Its Korean dashboard and per-page detail
+views are all in this one file; links move between them without a network
+connection. The
 `ai_review_results.jsonl` file is included for tooling. The archive and
 extracted files contain target details and response previews. Interface labels
 and known checks are shown in Korean; original model reasons and recorded
