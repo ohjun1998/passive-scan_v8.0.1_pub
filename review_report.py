@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a Korean dashboard and per-page evidence reports inside an AES ZIP."""
+"""Generate one Korean dashboard with embedded detail views inside an AES ZIP."""
 
 import argparse
 import collections
@@ -45,8 +45,8 @@ def labels(values, mapping):
     return ", ".join(mapping.get(value, "기타") for value in values) or "없음"
 
 
-def page_name(number):
-    return f"pages/candidate-{number:03d}.html"
+def page_id(number):
+    return f"candidate-{number:03d}"
 
 
 def counts(rows):
@@ -105,6 +105,8 @@ h1{font-size:clamp(1.8rem,4vw,2.6rem);line-height:1.2;margin:.4rem 0 1rem}h2{fon
 .sub{font-size:.88rem;color:var(--muted)}.evidence{display:inline-block;font:700 .82rem ui-monospace,monospace;background:var(--pale);padding:3px 7px;border-radius:5px}
 .preview{white-space:pre-wrap;background:#f5f7fa;padding:12px;border-radius:8px;max-width:480px;margin:0;font-size:.85rem}
 .nav{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:28px 0}.empty{color:var(--muted);margin:0}
+.detail-page{display:none}.detail-page:target,.detail-page:has(:target){display:block}
+body:has(.detail-page:target,.detail-page :target) #dashboard{display:none}
 @media(max-width:750px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.detail-grid{grid-template-columns:1fr}.shell{padding:20px 14px 48px}}
 """
 
@@ -128,7 +130,7 @@ def readable_html(rows):
         flagged = sum(f.get("status") == "manual_review" for f in row.get("findings", []))
         badge = (f'<span class="badge warn">수동 확인 {flagged}건</span>' if flagged
                  else '<span class="badge ok">표시 항목 없음</span>')
-        entries.append(f'<tr><td>{number}</td><td><a class="link" href="{page_name(number)}">페이지 {number:02d} 상세 보기</a>'
+        entries.append(f'<tr><td>{number}</td><td><a class="link" href="#{page_id(number)}">페이지 {number:02d} 상세 보기</a>'
                        f'<p class="url">{escape(row.get("url", ""))}</p></td>'
                        f'<td>{escape(labels(row.get("categories", []), CATEGORIES))}</td>'
                        f'<td>{escape(STATES.get(row.get("state"), "기타"))}</td>'
@@ -136,17 +138,19 @@ def readable_html(rows):
     table = ('<div class="table-wrap"><table class="table"><thead><tr><th>번호</th><th>대상 페이지</th>'
              '<th>검토 분류</th><th>진행 상태</th><th>HTTP 관찰</th><th>결과</th></tr></thead><tbody>'
              + "".join(entries) + '</tbody></table></div>') if entries else '<p class="empty">검토 결과가 없습니다.</p>'
-    body = ('<main class="shell"><header class="top"><span class="brand">PASSIVE SCAN · 검토 보고서</span>'
+    body = ('<main id="dashboard" class="shell"><header class="top"><span class="brand">PASSIVE SCAN · 검토 보고서</span>'
             '<span class="badge">보호된 보고서</span></header><p class="eyebrow">검토 현황</p>'
             '<h1>메인 대시보드</h1><p class="intro">정찰 결과에서 선정한 페이지의 제한된 HTTP 관찰과 수동 확인 대상을 확인합니다. '
             '페이지를 선택하면 가설, 모델 계획, 관찰 근거와 응답 미리보기를 볼 수 있습니다.</p>'
             '<div class="notice">수동 확인 항목은 취약점 확정이 아닙니다. 특히 입력값 반사만으로 XSS 실행을 입증할 수 없습니다.</div>'
             f'<div class="stats">{tiles}</div><section class="panel"><h2>페이지별 결과</h2>{table}</section>'
             '<p class="muted">원본 데이터는 압축파일의 ai_review_results.jsonl에 함께 들어 있습니다.</p></main>')
+    body += "".join(detail_section(row, number, len(rows))
+                    for number, row in enumerate(rows, 1))
     return document("검토 대시보드 | Passive Scan", body)
 
 
-def detail_html(row, number, total):
+def detail_section(row, number, total):
     def listing(items):
         return '<ul class="list">' + "".join(f'<li>{item}</li>' for item in items) + '</ul>' if items else '<p class="empty">기록 없음</p>'
 
@@ -159,7 +163,7 @@ def detail_html(row, number, total):
     plans = [f'<strong>{escape(PLAN_TEXT.get(x.get("action"), "기타 계획"))}</strong> · 모델 추론'
              f'<details class="sub"><summary>모델 선택 이유 원문</summary>{escape(x.get("question", ""))}</details>'
              for x in row.get("plans", [])]
-    facts = [f'<a class="evidence" href="#{escape(x.get("evidence_id", ""))}">{escape(x.get("evidence_id", ""))}</a> '
+    facts = [f'<a class="evidence" href="#{page_id(number)}-{escape(x.get("evidence_id", ""))}">{escape(x.get("evidence_id", ""))}</a> '
              f'{escape(ACTIONS.get(x.get("action"), "기타"))} · HTTP {escape(x.get("http_status", ""))}'
              f'<div class="sub">응답 SHA-256: <code>{escape(x.get("body_sha256", ""))}</code></div>'
              for x in row.get("facts", [])]
@@ -168,11 +172,11 @@ def detail_html(row, number, total):
                 f'<div>{escape(FINDING_TEXT.get(x.get("kind"), "판단 근거 원문을 확인하세요."))}</div>'
                 f'<details class="sub"><summary>판단 근거 원문</summary>{escape(x.get("reason", ""))}</details>'
                 '<div class="sub">연결된 증거: ' + (", ".join(
-                    f'<a href="#{escape(evidence_id)}">{escape(evidence_id)}</a>'
+                    f'<a href="#{page_id(number)}-{escape(evidence_id)}">{escape(evidence_id)}</a>'
                     for evidence_id in x.get("evidence_ids", [])) or "연결 없음") + '</div>'
                 for x in row.get("findings", [])]
     observations = "".join(
-        f'<tr id="obs-{index}"><td><span class="evidence">obs-{index}</span></td>'
+        f'<tr id="{page_id(number)}-obs-{index}"><td><span class="evidence">obs-{index}</span></td>'
         f'<td>{escape(ACTIONS.get(obs.get("action"), "기타"))}</td><td>{escape(obs.get("status", ""))}</td>'
         f'<td>{"예" if obs.get("marker_reflected") else "아니요"}</td>'
         f'<td><pre class="preview">{escape(obs.get("preview", ""))}</pre></td></tr>'
@@ -180,9 +184,9 @@ def detail_html(row, number, total):
     obs_table = ('<div class="table-wrap"><table class="table"><thead><tr><th>증거 ID</th><th>요청</th>'
                  '<th>HTTP</th><th>표식 반사</th><th>응답 미리보기</th></tr></thead><tbody>'
                  + observations + '</tbody></table></div>') if observations else '<p class="empty">관찰된 요청이 없습니다.</p>'
-    prev = f'<a href="candidate-{number-1:03d}.html">← 이전 페이지</a>' if number > 1 else '<span></span>'
-    next_page = f'<a href="candidate-{number+1:03d}.html">다음 페이지 →</a>' if number < total else '<span></span>'
-    body = (f'<main class="shell"><header class="top"><a class="brand" href="../review_report.html">← 메인 대시보드</a>'
+    prev = f'<a href="#{page_id(number-1)}">← 이전 페이지</a>' if number > 1 else '<span></span>'
+    next_page = f'<a href="#{page_id(number+1)}">다음 페이지 →</a>' if number < total else '<span></span>'
+    body = (f'<main id="{page_id(number)}" class="shell detail-page"><header class="top"><a class="brand" href="#dashboard">← 메인 대시보드</a>'
             f'<span class="badge">{number} / {total}</span></header><p class="eyebrow">페이지별 상세 결과</p>'
             f'<h1>페이지 {number:02d}</h1><p class="url"><strong>대상 URL</strong> · <code>{escape(row.get("url", ""))}</code></p>'
             f'<p>{escape(STATES.get(row.get("state"), "기타"))} · {escape(labels(row.get("categories", []), CATEGORIES))}</p>'
@@ -193,8 +197,8 @@ def detail_html(row, number, total):
             f'<section class="panel"><h2>모델 계획</h2>{listing(plans)}</section>'
             f'<section class="panel"><h2>관찰 근거</h2>{listing(facts)}</section></div>'
             f'<section class="panel"><h2>HTTP 관찰 내역</h2>{obs_table}</section>'
-            f'<nav class="nav">{prev}<a href="../review_report.html">대시보드로 돌아가기</a>{next_page}</nav></main>')
-    return document(f"페이지 {number:02d} 상세 결과 | Passive Scan", body)
+            f'<nav class="nav">{prev}<a href="#dashboard">대시보드로 돌아가기</a>{next_page}</nav></main>')
+    return body
 
 
 def archive(rows, input_path, output_path, password):
@@ -205,16 +209,13 @@ def archive(rows, input_path, output_path, password):
         stream.setpassword(password.encode("utf-8"))
         stream.setencryption(pyzipper.WZ_AES, nbits=256)
         stream.writestr("review_report.html", readable_html(rows).encode("utf-8"))
-        for number, row in enumerate(rows, 1):
-            stream.writestr(page_name(number), detail_html(row, number, len(rows)).encode("utf-8"))
         stream.write(input_path, "ai_review_results.jsonl")
     with pyzipper.AESZipFile(output_path) as stream:
         stream.setpassword(password.encode("utf-8"))
         if stream.read("ai_review_results.jsonl") != input_path.read_bytes():
             raise RuntimeError("Readable archive verification failed")
-        for name in ("review_report.html", *(page_name(i) for i in range(1, len(rows) + 1))):
-            if not stream.read(name):
-                raise RuntimeError(f"Readable archive verification failed: {name}")
+        if not stream.read("review_report.html"):
+            raise RuntimeError("Readable archive verification failed: review_report.html")
 
 
 def main():
