@@ -351,7 +351,7 @@ def assess(observations, expectation):
                  for index, entry in enumerate(observations, 1)}
     findings = []
     reflection_id, reflection = by_action.get("reflection", (None, {}))
-    if reflection.get("marker_reflected"):
+    if reflection.get("marker_reflected") and 200 <= reflection["status"] < 400:
         findings.append({"kind": "reflected_input", "status": "manual_review",
                          "reason": "A harmless marker was reflected; script execution was not checked.",
                          "evidence_ids": [reflection_id]})
@@ -360,7 +360,8 @@ def assess(observations, expectation):
         marker = expectation.get("private_marker", "")
         if owner in ("a", "b") and marker and expectation.get("other_account_must_be_denied") is True:
             owner_pair = by_action.get(owner)
-            if owner_pair and owner_pair[1].get("marker_present"):
+            if (owner_pair and owner_pair[1]["status"] == 200
+                    and owner_pair[1].get("marker_present")):
                 for label, pair in (("other_account", by_action.get("b" if owner == "a" else "a")),
                                     ("anonymous", by_action.get("anonymous"))):
                     if pair and pair[1]["status"] == 200 and pair[1].get("marker_present"):
