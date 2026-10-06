@@ -166,32 +166,14 @@ jobs:
                             "finding_kinds": dict(sorted(findings.items())),
                             "routes": route_summaries}, sort_keys=True))
           PY
-      - name: Summarize current review without exposing URLs
-        if: inputs.live
+      - name: Render protected readable report and candidate summary
+        if: success()
+        env:
+          REPORT_PASSWORD: ${{ secrets.ACTIONS_CRYPTO_PASSWORD }}
         run: |
-          python3 - <<'PY'
-          import collections
-          import json
-          import os
-          from pathlib import Path
-
-          rows = [json.loads(line) for line in Path("ai_review_results.jsonl").read_text().splitlines()]
-          states = collections.Counter(row["state"] for row in rows)
-          statuses = collections.Counter(str(obs["status"]) for row in rows for obs in row["observations"])
-          findings = collections.Counter(item["kind"] for row in rows for item in row["findings"])
-          summary = {"candidates": len(rows), "review_states": dict(sorted(states.items())),
-                     "http_status_counts": dict(sorted(statuses.items())),
-                     "finding_kinds": dict(sorted(findings.items()))}
-          print(json.dumps(summary, sort_keys=True))
-          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as stream:
-              stream.write("## Bounded review summary\n\n")
-              stream.write("| Metric | Count |\n| --- | ---: |\n")
-              stream.write(f"| Candidates | {len(rows)} |\n")
-              for label, values in (("State", states), ("HTTP", statuses), ("Manual review", findings)):
-                  for key, count in sorted(values.items()):
-                      stream.write(f"| {label}: {key} | {count} |\n")
-              stream.write("\nFindings require manual confirmation.\n")
-          PY
+          python3 -m pip install pyzipper==0.3.6
+          python3 review_report.py --input ai_review_results.jsonl \
+            --summary "$GITHUB_STEP_SUMMARY" --archive bounded-ai-review-readable.zip
       - name: Encrypt observations before uploading
         if: always()
         env:
@@ -205,6 +187,8 @@ jobs:
         if: always()
         with:
           name: bounded-ai-review-secured
-          path: ai_review_results.jsonl.gpg
+          path: |
+            ai_review_results.jsonl.gpg
+            bounded-ai-review-readable.zip
           if-no-files-found: ignore
           retention-days: 7
