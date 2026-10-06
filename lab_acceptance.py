@@ -55,7 +55,10 @@ def call(opener, path, expected, data=None, origin=BASE):
         if len(body) > 65536:
             raise AssertionError("Unexpectedly large response")
         if response.status != expected:
-            raise AssertionError(f"{path.split('?')[0]}: expected {expected}, got {response.status}")
+            detail = body[:300].decode("utf-8", "replace") if data is None else ""
+            raise AssertionError(f"{path.split('?')[0]}: expected {expected}, got {response.status}; "
+                                 f"content-type={response.headers.get('Content-Type', '')}; "
+                                 f"server={response.headers.get('Server', '')}; body={detail!r}")
         return json.loads(body) if "application/json" in response.headers.get("Content-Type", "") else body.decode()
 
 
