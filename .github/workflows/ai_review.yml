@@ -184,13 +184,13 @@ jobs:
                      "finding_kinds": dict(sorted(findings.items()))}
           print(json.dumps(summary, sort_keys=True))
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as stream:
-              stream.write("## Bounded review summary\\n\\n")
-              stream.write("| Metric | Count |\\n| --- | ---: |\\n")
-              stream.write(f"| Candidates | {len(rows)} |\\n")
+              stream.write("## Bounded review summary\n\n")
+              stream.write("| Metric | Count |\n| --- | ---: |\n")
+              stream.write(f"| Candidates | {len(rows)} |\n")
               for label, values in (("State", states), ("HTTP", statuses), ("Manual review", findings)):
                   for key, count in sorted(values.items()):
-                      stream.write(f"| {label}: {key} | {count} |\\n")
-              stream.write("\\nFindings require manual confirmation.\\n")
+                      stream.write(f"| {label}: {key} | {count} |\n")
+              stream.write("\nFindings require manual confirmation.\n")
           PY
       - name: Encrypt observations before uploading
         if: always()
