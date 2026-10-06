@@ -126,6 +126,28 @@ appropriate data-handling arrangement.
 - `halted_on_server_signal`: stopped on 429 or 5xx; do not automatically retry.
 - `model_unavailable` / `request_error`: no verified conclusion.
 
+Each new JSONL row also separates the investigation stages:
+
+- `hypotheses`: a pre-request question for a supported reflection check or a
+  configured, owned test-object access comparison. `not_tested` means no useful
+  comparison has been made; `no_signal_observed` does not prove safety;
+  `needs_manual_review` means an observation met the candidate rule.
+- `plans`: the model's bounded next-action choice and its testable question,
+  always marked `inferred`. These are not response evidence.
+- `facts`: actual HTTP observations marked `observed`, with stable per-candidate
+  IDs (`obs-1`, `obs-2`, …), HTTP status and response SHA-256. The observation
+  also retains the redacted preview in the encrypted result.
+- `findings`: still only `manual_review` candidates. Each entry now lists the
+  observation IDs that support it; an access comparison needs both the owner
+  baseline and the other identity's response. A response code alone never
+  establishes a vulnerability.
+
+The protected HTML report shows these stages and evidence links. Older
+encrypted JSONL artifacts can still be exported; missing stage fields appear
+as empty sections rather than fabricated evidence. The model's instructions
+ask for testable questions, while response-derived facts and finding links are
+constructed by code from actual observations.
+
 For cross-account checks, set an expectation only for a **test object that
 you own**, including an innocuous marker known in advance and a rule that
 other-account access should be denied. A second 200 response alone is not
