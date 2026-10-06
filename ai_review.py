@@ -26,6 +26,8 @@ MAX_URLS = 50
 MAX_REQUESTS = 100
 MAX_BODY = 16_384
 REFLECTION_KEYS = {"q", "query", "search", "term", "keyword"}
+SQL_KEYS = {"id", "item", "user", "order", "q", "search", "filter"}
+TEST_KINDS = {"access_control", "reflection", "sql_error", "upload"}
 BLOCKED_PARTS = re.compile(
     r"(?:^|[/_-])(logout|signout|delete|remove|revoke|destroy|purchase|checkout|pay|transfer)(?:[/_.-]|$)",
     re.IGNORECASE,
@@ -174,12 +176,78 @@ class HttpClient:
             }
             return result, raw
 
+    def configured_test(self, url, kind, settings):
+        """Run one explicitly configured, bounded probe on the exact URL."""
+        parts = self.policy.validate(url, resolve=True, live=True)
+        if kind == "sql_error":
+            if settings.get("identity", "anonymous") != "anonymous":
+                raise ValueError("SQL baseline comparison requires anonymous identity")
+            key = settings.get("parameter")
+            pairs = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+            if not isinstance(key, str) or key.lower() not in SQL_KEYS or key not in [k for k, _ in pairs]:
+                raise ValueError("SQL probe requires a named existing query parameter")
+            # One syntax check, never a union, delay, stacked statement, or data extraction.
+            pairs = [(k, v + "'" if k == key else v) for k, v in pairs]
+            target = urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(pairs)))
+            method, body, content_type = "GET", None, None
+        elif kind == "upload":
+            field = settings.get("field")
+            if (not isinstance(field, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,39}", field)
+                    or parts.query):
+                raise ValueError("Upload requires a safe field name and a query-free URL")
+            marker = "review-" + uuid.uuid4().hex[:12]
+            boundary = "Review" + uuid.uuid4().hex
+            body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"{field}\"; "
+                    f"filename=\"{marker}.txt\"\r\nContent-Type: text/plain\r\n\r\n"
+                    f"{marker}\r\n--{boundary}--\r\n").encode()
+            target = url
+            method, content_type = "POST", f"multipart/form-data; boundary={boundary}"
+        else:
+            raise ValueError("Unknown configured test")
+        self.policy.validate(target, live=True)
+        headers = {"User-Agent": "PassiveScan-Authorized-AI-Review/0.1",
+                   "Accept": "text/html,application/json"}
+        identity = settings.get("identity", "anonymous")
+        if identity not in ("anonymous", "a", "b"):
+            raise ValueError("Unknown test identity")
+        if identity != "anonymous":
+            token = self.credentials.get(identity)
+            if not token:
+                raise ValueError("Configured test account token missing")
+            headers["Authorization"] = f"Bearer {token}"
+        if content_type:
+            headers["Content-Type"] = content_type
+        self.policy.budget(parts.hostname.lower())
+        request = urllib.request.Request(target, data=body, headers=headers, method=method)
+        try:
+            response = self.opener.open(request, timeout=5)
+        except urllib.error.HTTPError as exc:
+            response = exc
+        with response:
+            raw = response.read(MAX_BODY + 1)
+            status = response.status if hasattr(response, "status") else response.code
+            return {"action": kind, "url": parts._replace(query="").geturl(),
+                    "status": status, "content_type": response.headers.get("Content-Type", "")[:120],
+                    "headers": {}, "body_sha256": hashlib.sha256(raw).hexdigest(),
+                    "body_length_at_least": len(raw), "body_truncated": len(raw) > MAX_BODY,
+                    "preview": sanitize(raw[:1200].decode("utf-8", "replace")),
+                    "method": method}, raw
+
 
 SCHEMA = {
     "type": "object", "properties": {
-        "action": {"type": "string", "enum": ["anonymous", "a", "b", "reflection", "stop"]},
+        "action": {"type": "string", "enum": ["anonymous", "a", "b", "reflection",
+                                              "sql_error", "upload", "stop"]},
         "reason": {"type": "string"},
     }, "required": ["action", "reason"], "additionalProperties": False,
+}
+ACTION_DESCRIPTIONS = {
+    "anonymous": "Anonymous exact-URL baseline GET.",
+    "a": "Exact-URL GET with configured test account A.",
+    "b": "Exact-URL GET with configured test account B.",
+    "reflection": "Harmless marker in an existing search query.",
+    "sql_error": "One apostrophe syntax probe in a configured query parameter after a healthy baseline; an error is only a review signal.",
+    "upload": "One configured plain-text .txt upload; acceptance alone is not a vulnerability.",
 }
 
 
@@ -197,7 +265,9 @@ class GptPlanner:
         context = {
             "url_features": {"path": re.sub(r"\d{3,}", "{ID}", parts.path),
                              "query_keys": [key for key, _ in urllib.parse.parse_qsl(parts.query)]},
-            "available_actions": available, "observations": observations,
+            "available_actions": available,
+            "action_descriptions": {name: ACTION_DESCRIPTIONS[name] for name in available},
+            "observations": observations,
         }
         response = self.client.responses.create(
             model=self.model,
@@ -240,7 +310,9 @@ class ChatGPTPlanner(GptPlanner):
         context = {
             "url_features": {"path": re.sub(r"\d{3,}", "{ID}", parts.path),
                              "query_keys": [key for key, _ in urllib.parse.parse_qsl(parts.query)]},
-            "available_actions": available, "observations": observations,
+            "available_actions": available,
+            "action_descriptions": {name: ACTION_DESCRIPTIONS[name] for name in available},
+            "observations": observations,
         }
         client = self.OpenAI(api_key=self.session.access_token(),
                              base_url="https://api.openai.com/v1", max_retries=0)
@@ -271,12 +343,56 @@ class ChatGPTPlanner(GptPlanner):
         return result if action in available + ["stop"] else {"action": "stop", "reason": "Invalid action"}
 
 
-def available_actions(url, credentials, tried):
+def test_candidates(url, config):
+    """Map URL features to hypotheses without treating a name as evidence."""
+    parts = urllib.parse.urlsplit(url)
+    keys = {key.lower() for key, _ in urllib.parse.parse_qsl(parts.query)}
+    path = parts.path.lower()
+    settings = config.get("active_tests", {}).get(url, {})
+    if not isinstance(settings, dict):
+        settings = {}
+    result = []
+    def add(kind, signal, prerequisite, ready):
+        result.append({"kind": kind, "signal": signal, "prerequisite": prerequisite,
+                       "status": "ready" if ready else "needs_configuration"})
+    if "object_access" in classify(url) or "role_access" in classify(url):
+        exp = config.get("expectations", {}).get(url, {})
+        add("access_control", "객체 또는 역할 경로",
+            "테스트 계정 A/B, 소유 테스트 객체, 기대 접근 정책",
+            bool(exp.get("private_marker") and exp.get("owner") in ("a", "b")
+                 and exp.get("other_account_must_be_denied") is True))
+    if keys & REFLECTION_KEYS:
+        add("reflection", "검색 매개변수", "기존 검색 매개변수", True)
+    if keys & SQL_KEYS or re.search(r"/(?:api/)?(?:search|items|products|orders)(?:/|$)", path):
+        add("sql_error", "조회 경로 또는 식별자 매개변수",
+            "해당 URL의 기존 조회 매개변수와 active_tests.sql_error.parameter",
+            bool(settings.get("sql_error", {}).get("parameter") in
+                 [k for k, _ in urllib.parse.parse_qsl(parts.query)]
+                 and settings.get("sql_error", {}).get("parameter", "").lower() in SQL_KEYS))
+    if re.search(r"/(?:upload|attachments|files)(?:/|$)", path):
+        add("upload", "업로드 관련 경로", "정확한 업로드 URL과 active_tests.upload.field",
+            bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,39}",
+                              str(settings.get("upload", {}).get("field", ""))) and not parts.query))
+    return result
+
+
+def available_actions(url, credentials, tried, config=None):
     actions = ["anonymous"]
-    actions.extend(k for k in ("a", "b") if credentials.get(k))
+    enabled = set(config.get("enabled_test_kinds", [])) if config and "enabled_test_kinds" in config else None
+    if enabled is None or "access_control" in enabled:
+        actions.extend(k for k in ("a", "b") if credentials.get(k))
     pairs = urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query, keep_blank_values=True)
-    if any(key.lower() in REFLECTION_KEYS for key, _ in pairs):
+    if (enabled is None or "reflection" in enabled) and any(key.lower() in REFLECTION_KEYS for key, _ in pairs):
         actions.append("reflection")
+    if config:
+        enabled = (enabled or set()) & TEST_KINDS
+        for candidate in test_candidates(url, config):
+            if candidate["status"] == "ready" and candidate["kind"] in enabled:
+                if candidate["kind"] in ("sql_error", "upload"):
+                    actions.append(candidate["kind"])
+    # The error probe must have a healthy baseline for comparison.
+    if "anonymous" not in tried and "sql_error" in actions:
+        actions.remove("sql_error")
     return [a for a in actions if a not in tried]
 
 
@@ -379,7 +495,8 @@ def run(config, urls, planner, client, output, live=False):
     # Prefer endpoints with an identifiable review condition and retain one
     # representative per route. Model tokens and target requests remain bounded.
     expected_urls = config.get("expectations", {})
-    urls = sorted(urls, key=lambda u: (u not in expected_urls, "basic_response" in classify(u), u))
+    urls = sorted(urls, key=lambda u: (u not in expected_urls,
+                                       -len(test_candidates(u, config)), u))
     for url in urls:
         try:
             policy.validate(url, live=live)
@@ -398,11 +515,15 @@ def run(config, urls, planner, client, output, live=False):
             expectation = config.get("expectations", {}).get(url, {})
             report = {"url": sanitize(url), "categories": classify(url), "observations": [],
                       "findings": [], "hypotheses": hypotheses_for(url, expectation),
+                      "test_candidates": test_candidates(url, config),
                       "facts": [], "plans": [], "state": "dry_run" if not live else "completed"}
             if live:
                 tried = set()
                 for _ in range(min(4, policy.max_requests - policy.request_count)):
-                    available = available_actions(url, client.credentials, tried)
+                    available = available_actions(url, client.credentials, tried, config)
+                    if not any(obs["action"] == "anonymous" and 200 <= obs["status"] < 400
+                               for obs in report["observations"]):
+                        available = [a for a in available if a != "sql_error"]
                     if not available:
                         break
                     try:
@@ -419,8 +540,13 @@ def run(config, urls, planner, client, output, live=False):
                         break
                     tried.add(action)
                     try:
-                        observation, raw = client.fetch(url, identity="anonymous" if action == "reflection" else action,
-                                                        reflection=action == "reflection")
+                        if action in ("sql_error", "upload"):
+                            settings = config["active_tests"][url][action]
+                            observation, raw = client.configured_test(url, action, settings)
+                        else:
+                            observation, raw = client.fetch(
+                                url, identity="anonymous" if action == "reflection" else action,
+                                reflection=action == "reflection")
                     except Exception as exc:
                         report["state"] = "request_error"
                         report["error"] = type(exc).__name__

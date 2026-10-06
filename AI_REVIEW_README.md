@@ -21,12 +21,60 @@ only on targets where program rules explicitly allow the selected traffic.
    your **own test object** is a `manual_review` candidate, never an
    automatically submitted report.
 
-The implemented checks are exact-URL anonymous/own-test-account GETs and a
-harmless unique reflection marker in an existing search query parameter. It
-does **not** prove XSS from reflection, infer an API's POST body from a URL,
-or test SQL injection, upload flows, SSRF, financial actions, and other
-state-changing features. Adding those requires specific test accounts,
-expected behavior, safety constraints and independent validators.
+The default checks are exact-URL anonymous/own-test-account GETs and a
+harmless unique reflection marker. A configured live run can additionally
+perform one SQL error signal check on an existing query parameter or send one
+plain-text upload to an exact URL. Neither observation proves a vulnerability.
+It does **not** infer an API's POST body from a URL, execute scripts, perform
+data extraction, or test SSRF and financial actions.
+
+## Adaptive test selection from the URL list
+
+Each candidate report includes `test_candidates`: authorization, reflection,
+SQL error signal, and upload hypotheses inferred from path and query-key
+features. The report distinguishes a ready test definition from one needing
+additional configuration. **A URL label is a lead, not evidence.** The model
+sees the available actions and actual observations, then chooses one action
+at a time; code independently checks its choice. The single HTML report shows
+the hypotheses alongside plans and observations. Offline mode lists candidate
+tests without contacting the target or the model.
+
+`enabled_test_kinds` restricts the selectable families. If omitted, the
+original GET/account/reflection behavior is retained. An empty list permits
+only anonymous baseline GETs. For example:
+
+```json
+{
+  "enabled_test_kinds": ["access_control", "reflection", "sql_error", "upload"],
+  "active_tests": {
+    "https://example.test/search?q=shoes": {
+      "sql_error": {"parameter": "q", "identity": "anonymous"}
+    },
+    "https://example.test/upload": {
+      "upload": {"field": "file", "identity": "a"}
+    }
+  }
+}
+```
+
+Merge these keys into the normal config along with exact `allowed_hosts`,
+`live_path_prefixes`, and request limits. A SQL probe requires a healthy
+anonymous baseline, then appends a single apostrophe to a named, existing
+query parameter. It records the HTTP response for human comparison; no
+SQL injection finding is generated. The upload action sends one generated
+`.txt` file with a harmless marker to the exact configured URL and field.
+Only the configured test identity can be used, with a token supplied through
+the existing credential environment mapping. It neither fetches the uploaded
+file nor treats an accepted upload as a vulnerability. A different form
+schema or upload destination needs an explicit test definition.
+
+Model output cannot change the configured URL, parameter, field, method,
+headers, or payload. No configured POST action runs unless `upload` is in
+`enabled_test_kinds`, its URL has a valid `active_tests.upload.field`,
+and live mode is explicitly selected. Apply only where the program permits
+uploads and use a disposable test account. The existing global request budget,
+host/path policy, one-second minimum interval, no-redirect behavior, and
+429/5xx stop still apply.
 
 This version uses GPT through the OpenAI Responses API. MCP is optional: the
 same bounded HTTP operations could later be exposed as MCP tools.

@@ -17,7 +17,10 @@ FINDINGS = {"reflected_input": "입력값 반사", "access_control": "접근 통
 HYPOTHESES = {"not_tested": "미검증", "needs_manual_review": "수동 확인 필요",
               "no_signal_observed": "신호 관찰되지 않음"}
 ACTIONS = {"anonymous": "비로그인", "a": "계정 A", "b": "계정 B",
-           "reflection": "반사 확인", "stop": "중단"}
+           "reflection": "반사 확인", "sql_error": "SQL 오류 신호 확인",
+           "upload": "무해한 텍스트 업로드", "stop": "중단"}
+TESTS = {"access_control": "인가", "reflection": "입력 반사",
+         "sql_error": "SQL 오류 신호", "upload": "파일 업로드"}
 HYPOTHESIS_TEXT = {
     "reflected_input": ("무해한 검색 표식이 응답에 나타나는가?",
                         "반사만으로 스크립트 실행 여부를 판단할 수 없습니다."),
@@ -67,8 +70,8 @@ def summary(rows):
         lines.extend(f"| {title}: {mapping.get(key, key)} | {value} |"
                      for key, value in sorted(values.items()))
     lines += ["", "### 페이지별 결과 (URL과 응답 내용 제외)", "",
-              "| 번호 | 상태 | 분류 | 요청 / HTTP | 수동 확인 |",
-              "| ---: | --- | --- | --- | --- |"]
+              "| 번호 | 상태 | 분류 | 테스트 후보 | 요청 / HTTP | 수동 확인 |",
+              "| ---: | --- | --- | --- | --- | --- |"]
     for number, row in enumerate(rows, 1):
         state = STATES.get(row.get("state"), "기타")
         categories = labels((c for c in row.get("categories", []) if c in CATEGORIES), CATEGORIES)
@@ -77,7 +80,9 @@ def summary(rows):
                             if obs.get("action") in ACTIONS and isinstance(obs.get("status"), int)) or "—"
         kinds = ", ".join(FINDINGS[f["kind"]] for f in row.get("findings", [])
                           if f.get("kind") in FINDINGS and f.get("status") == "manual_review") or "—"
-        lines.append(f"| {number} | {state} | {categories} | {actions} | {kinds} |")
+        tests = ", ".join(TESTS[c["kind"]] for c in row.get("test_candidates", [])
+                          if c.get("kind") in TESTS) or "—"
+        lines.append(f"| {number} | {state} | {categories} | {tests} | {actions} | {kinds} |")
     lines += ["", "수동 확인 대상은 취약점 확정이 아닙니다. URL과 근거는 보호된 HTML 보고서에서 확인하세요.", ""]
     return "\n".join(lines)
 
@@ -133,10 +138,11 @@ def readable_html(rows):
         entries.append(f'<tr><td>{number}</td><td><a class="link" href="#{page_id(number)}">페이지 {number:02d} 상세 보기</a>'
                        f'<p class="url">{escape(row.get("url", ""))}</p></td>'
                        f'<td>{escape(labels(row.get("categories", []), CATEGORIES))}</td>'
+                       f'<td>{escape(labels((c.get("kind") for c in row.get("test_candidates", [])), TESTS))}</td>'
                        f'<td>{escape(STATES.get(row.get("state"), "기타"))}</td>'
                        f'<td>{len(row.get("observations", []))}</td><td>{badge}</td></tr>')
     table = ('<div class="table-wrap"><table class="table"><thead><tr><th>번호</th><th>대상 페이지</th>'
-             '<th>검토 분류</th><th>진행 상태</th><th>HTTP 관찰</th><th>결과</th></tr></thead><tbody>'
+             '<th>검토 분류</th><th>테스트 후보</th><th>진행 상태</th><th>HTTP 관찰</th><th>결과</th></tr></thead><tbody>'
              + "".join(entries) + '</tbody></table></div>') if entries else '<p class="empty">검토 결과가 없습니다.</p>'
     body = ('<main id="dashboard" class="shell"><header class="top"><span class="brand">PASSIVE SCAN · 검토 보고서</span>'
             '<span class="badge">보호된 보고서</span></header><p class="eyebrow">검토 현황</p>'
@@ -160,6 +166,11 @@ def detail_section(row, number, total):
                   f'<div class="sub">{escape(HYPOTHESIS_TEXT.get(x.get("kind"), ("", ""))[1])}</div>'
                   f'<details class="sub"><summary>가설 원문</summary>{escape(x.get("question", ""))}<br>{escape(x.get("limit", ""))}</details>'
                   for x in row.get("hypotheses", [])]
+    candidates = [f'<strong>{escape(TESTS.get(x.get("kind"), "기타"))}</strong> '
+                  f'<span class="badge">{("테스트 정의 준비" if x.get("status") == "ready" else "추가 설정 필요")}</span>'
+                  f'<div>{escape(x.get("signal", ""))}</div>'
+                  f'<div class="sub">필요 조건: {escape(x.get("prerequisite", ""))}</div>'
+                  for x in row.get("test_candidates", [])]
     plans = [f'<strong>{escape(PLAN_TEXT.get(x.get("action"), "기타 계획"))}</strong> · 모델 추론'
              f'<details class="sub"><summary>모델 선택 이유 원문</summary>{escape(x.get("question", ""))}</details>'
              for x in row.get("plans", [])]
@@ -192,6 +203,7 @@ def detail_section(row, number, total):
             f'<p>{escape(STATES.get(row.get("state"), "기타"))} · {escape(labels(row.get("categories", []), CATEGORIES))}</p>'
             '<div class="notice">모델 계획은 추론이며, 관찰 근거는 HTTP 응답에서 수집했습니다. 수동 확인 대상은 취약점 확정이 아닙니다.</div>'
             '<div class="detail-grid">'
+            f'<section class="panel"><h2>URL에서 도출한 테스트 후보</h2>{listing(candidates)}</section>'
             f'<section class="panel"><h2>검토 가설</h2>{listing(hypotheses)}</section>'
             f'<section class="panel"><h2>수동 확인 대상</h2>{listing(findings)}</section>'
             f'<section class="panel"><h2>모델 계획</h2>{listing(plans)}</section>'
