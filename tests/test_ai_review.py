@@ -129,6 +129,12 @@ class AiReviewTests(unittest.TestCase):
         ai_review.update_hypotheses(failed_search, [{"action": "reflection", "status": 503,
                                                      "marker_reflected": False}], [], {})
         self.assertEqual(failed_search[0]["status"], "not_tested")
+        self.assertEqual(ai_review.assess([{"action": "reflection", "status": 503,
+                                           "marker_reflected": True}], {}), [])
+        self.assertEqual(ai_review.assess([{"action": "a", "status": 503,
+                                           "marker_present": True},
+                                          {"action": "b", "status": 200,
+                                           "marker_present": True}], expected), [])
 
     def test_scope_redirect_and_stop_signal(self):
         policy = ai_review.Policy(self.config)
