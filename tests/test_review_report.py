@@ -33,6 +33,23 @@ class ReviewReportTests(unittest.TestCase):
         self.assertNotIn("<script>", report)
         self.assertIn("default-src 'none'", report)
 
+    def test_html_links_hypothesis_to_observed_evidence(self):
+        row = {"url": "https://lab.test/api/orders/123", "state": "completed",
+               "categories": ["object_access"],
+               "hypotheses": [{"kind": "access_control", "status": "needs_manual_review",
+                               "question": "Can B read A's test object?", "limit": "Check sharing policy."}],
+               "plans": [{"action": "a", "question": "Read owner baseline?", "confidence": "inferred"}],
+               "facts": [{"evidence_id": "obs-1", "action": "a", "http_status": 200,
+                          "body_sha256": "abc", "confidence": "observed"}],
+               "observations": [{"action": "a", "status": 200, "preview": "test",
+                                 "marker_reflected": False}],
+               "findings": [{"kind": "access_control", "status": "manual_review",
+                             "reason": "Other identity saw marker", "evidence_ids": ["obs-1"]}]}
+        report = review_report.readable_html([row])
+        self.assertIn("Can B read A&#x27;s test object?", report)
+        self.assertIn("Evidence: obs-1", report)
+        self.assertIn("SHA-256 <code>abc</code>", report)
+
     def test_encrypted_zip_round_trip_and_wrong_password(self):
         try:
             import pyzipper
