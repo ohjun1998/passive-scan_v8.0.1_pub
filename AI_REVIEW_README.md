@@ -177,8 +177,8 @@ access to the rotating token. The results are encrypted in the
 
 ### Read a review result on a phone or computer
 
-Open the completed review run in GitHub Actions and read **Bounded review
-summary**. It shows each candidate's number, state, category, HTTP actions
+Open the completed review run in GitHub Actions and read the Korean **한정 범위
+검토 요약**. It shows each page's number, state, category, HTTP actions
 and manual-review kind. This summary deliberately omits target URLs, query
 values, response bodies and finding reasons. It does not identify a confirmed
 vulnerability.
@@ -187,9 +187,13 @@ For full evidence, download the `bounded-ai-review-secured` artifact. The
 downloaded outer ZIP contains `bounded-ai-review-readable.zip` (AES-256) and
 the original `ai_review_results.jsonl.gpg`. Open the inner ZIP with an
 AES-encrypted-ZIP-capable archive app using the `ACTIONS_CRYPTO_PASSWORD`
-value. It contains `review_report.html` for a browser and the original JSONL
-for tooling. Extract the HTML to a private location before opening it;
-the archive and extracted files contain target details and response previews.
+value. Extract the entire inner ZIP to a private location, preserving its
+`pages/` directory. Open `review_report.html` in a browser for the Korean
+dashboard, then choose a page to view its individual HTML report. The
+`ai_review_results.jsonl` file is included for tooling. The archive and
+extracted files contain target details and response previews. Interface labels
+and known checks are shown in Korean; original model reasons and recorded
+evidence remain available in expandable sections without automatic translation.
 You can still decrypt the GPG file with GnuPG on a computer. Never use the
 GitHub account password or ChatGPT password for either archive. Existing runs
 created before this report change only contain the GPG file. To export one
