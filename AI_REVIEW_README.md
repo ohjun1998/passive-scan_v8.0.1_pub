@@ -191,7 +191,9 @@ value. Extract the entire inner ZIP to a private location, preserving its
 `pages/` directory. Open `review_report.html` in a browser for the Korean
 dashboard, then choose a page to view its individual HTML report. The
 `ai_review_results.jsonl` file is included for tooling. The archive and
-extracted files contain target details and response previews.
+extracted files contain target details and response previews. Interface labels
+and known checks are shown in Korean; original model reasons and recorded
+evidence remain available in expandable sections without automatic translation.
 You can still decrypt the GPG file with GnuPG on a computer. Never use the
 GitHub account password or ChatGPT password for either archive. Existing runs
 created before this report change only contain the GPG file. To export one
