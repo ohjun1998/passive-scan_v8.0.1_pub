@@ -10,7 +10,8 @@ from pathlib import Path
 
 STATES = {"completed": "검토 완료", "dry_run": "요청 없는 미리보기",
           "model_unavailable": "모델 사용 불가", "request_error": "요청 오류",
-          "halted_on_server_signal": "서버 신호로 중단"}
+          "halted_on_server_signal": "서버 신호로 중단",
+          "not_selected": "계획에서 선택되지 않음"}
 CATEGORIES = {"object_access": "객체 접근", "role_access": "역할별 접근",
               "input_reflection": "입력값 반사", "basic_response": "기본 응답"}
 FINDINGS = {"reflected_input": "입력값 반사", "access_control": "접근 통제"}
@@ -144,12 +145,18 @@ def readable_html(rows):
     table = ('<div class="table-wrap"><table class="table"><thead><tr><th>번호</th><th>대상 페이지</th>'
              '<th>검토 분류</th><th>테스트 후보</th><th>진행 상태</th><th>HTTP 관찰</th><th>결과</th></tr></thead><tbody>'
              + "".join(entries) + '</tbody></table></div>') if entries else '<p class="empty">검토 결과가 없습니다.</p>'
+    planning = rows[0].get("planning_summary", {}) if rows else {}
+    planning_note = (
+        f'<p class="muted">전체 계획: {escape(planning.get("steps", 0))}단계 · '
+        f'{escape(planning.get("requests", 0))}개 요청 · '
+        f'종료 이유: {escape(planning.get("stop_reason") or "계획 완료 또는 요청 한도")}</p>'
+        if planning.get("mode") == "global_adaptive" else "")
     body = ('<main id="dashboard" class="shell"><header class="top"><span class="brand">PASSIVE SCAN · 검토 보고서</span>'
             '<span class="badge">보호된 보고서</span></header><p class="eyebrow">검토 현황</p>'
             '<h1>메인 대시보드</h1><p class="intro">정찰 결과에서 선정한 페이지의 제한된 HTTP 관찰과 수동 확인 대상을 확인합니다. '
             '페이지를 선택하면 가설, 모델 계획, 관찰 근거와 응답 미리보기를 볼 수 있습니다.</p>'
             '<div class="notice">수동 확인 항목은 취약점 확정이 아닙니다. 특히 입력값 반사만으로 XSS 실행을 입증할 수 없습니다.</div>'
-            f'<div class="stats">{tiles}</div><section class="panel"><h2>페이지별 결과</h2>{table}</section>'
+            f'<div class="stats">{tiles}</div>{planning_note}<section class="panel"><h2>페이지별 결과</h2>{table}</section>'
             '<p class="muted">원본 데이터는 압축파일의 ai_review_results.jsonl에 함께 들어 있습니다.</p></main>')
     body += "".join(detail_section(row, number, len(rows))
                     for number, row in enumerate(rows, 1))
@@ -171,7 +178,11 @@ def detail_section(row, number, total):
                   f'<div>{escape(x.get("signal", ""))}</div>'
                   f'<div class="sub">필요 조건: {escape(x.get("prerequisite", ""))}</div>'
                   for x in row.get("test_candidates", [])]
-    plans = [f'<strong>{escape(PLAN_TEXT.get(x.get("action"), "기타 계획"))}</strong> · 모델 추론'
+    plans = [f'<strong>{escape(PLAN_TEXT.get(x.get("action"), ACTIONS.get(x.get("action"), "기타 계획")))}</strong> · 모델 추론'
+             f' · 단계 {escape(x.get("round", "—"))}'
+             f'<div class="sub">선택 시점: 자산 {escape(x.get("context", {}).get("assets", "—"))}개, '
+             f'관찰 사실 {escape(x.get("context", {}).get("observed_facts", "—"))}개, '
+             f'수동 확인 후보 {escape(x.get("context", {}).get("manual_review_candidates", "—"))}개</div>'
              f'<details class="sub"><summary>모델 선택 이유 원문</summary>{escape(x.get("question", ""))}</details>'
              for x in row.get("plans", [])]
     facts = [f'<a class="evidence" href="#{page_id(number)}-{escape(x.get("evidence_id", ""))}">{escape(x.get("evidence_id", ""))}</a> '
