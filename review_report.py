@@ -26,12 +26,13 @@ ACTIONS = {"anonymous": "비로그인", "a": "계정 A", "b": "계정 B",
            "reflection": "반사 확인", "xss_browser": "브라우저 XSS 확인",
            "sql_error": "SQL 오류 신호 확인", "sql_boolean": "SQL 참·거짓 비교",
            "upload": "무해한 텍스트 업로드", "upload_verify": "업로드 파일 조회",
-           "stop": "중단"}
+           "worker_get": "Worker GET", "worker_post": "Worker POST",
+           "investigate": "자율 검증 Worker", "stop": "중단"}
 TESTS = {"access_control": "인가", "download_access": "다운로드 인가",
          "reflection": "입력 반사", "xss_browser": "브라우저 XSS 확인",
          "sql_error": "SQL 오류 신호", "sql_boolean": "SQL 참·거짓 비교",
          "upload": "파일 업로드",
-         "upload_verify": "업로드 후 조회"}
+         "upload_verify": "업로드 후 조회", "investigate": "Worker 자유 검증"}
 HYPOTHESIS_TEXT = {
     "reflected_input": ("무해한 검색 표식이 응답에 나타나는가?",
                         "반사만으로 스크립트 실행 여부를 판단할 수 없습니다."),
@@ -219,6 +220,14 @@ def detail_section(row, number, total):
                     f'<a href="#{page_id(number)}-{escape(evidence_id)}">{escape(evidence_id)}</a>'
                     for evidence_id in x.get("evidence_ids", [])) or "연결 없음") + '</div>'
                 for x in row.get("findings", [])]
+    worker_leads = [
+        f'<strong>{escape(x.get("kind", "미분류"))}</strong> '
+        '<span class="badge warn">Worker 추론 · 수동 검토</span>'
+        f'<div>{escape(x.get("reason", ""))}</div>'
+        '<div class="sub">연결된 관찰: ' + ", ".join(
+            f'<a href="#{page_id(number)}-{escape(evidence_id)}">{escape(evidence_id)}</a>'
+            for evidence_id in x.get("evidence_ids", [])) + '</div>'
+        for x in row.get("worker_leads", [])]
     observations = "".join(
         f'<tr id="{page_id(number)}-obs-{index}"><td><span class="evidence">obs-{index}</span></td>'
         f'<td>{escape(ACTIONS.get(obs.get("action"), "기타"))}</td><td>{escape(obs.get("status", ""))}</td>'
@@ -239,6 +248,7 @@ def detail_section(row, number, total):
             f'<section class="panel"><h2>URL에서 도출한 테스트 후보</h2>{listing(candidates)}</section>'
             f'<section class="panel"><h2>검토 가설</h2>{listing(hypotheses)}</section>'
             f'<section class="panel"><h2>수동 확인 대상</h2>{listing(findings)}</section>'
+            f'<section class="panel"><h2>Worker가 제안한 검토 후보</h2>{listing(worker_leads)}</section>'
             f'<section class="panel"><h2>모델 계획</h2>{listing(plans)}</section>'
             f'<section class="panel"><h2>관찰 근거</h2>{listing(facts)}</section></div>'
             f'<section class="panel"><h2>HTTP 관찰 내역</h2>{obs_table}</section>'

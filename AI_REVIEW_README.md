@@ -15,8 +15,10 @@ only on targets where program rules explicitly allow the selected traffic.
 3. In live mode, the global planner sees the selected URL assets, prior
    observed facts, manual-review candidates and progress. It chooses one
    available URL/check pair; the bounded worker executes it, records the
-   response, and the planner decides again. Model output cannot select
-   arbitrary URLs, HTTP methods, headers, account tokens, or payloads.
+   response, and the planner decides again. When the exact URL has a Worker
+   capability, the model can construct a short sequence of approved query or
+   form values and adapt its next request to observations. The executor checks
+   each proposed step against the capability and request policy.
 4. Saves JSON Lines containing status, a redacted response preview and body
    hash. An observed reflected marker or cross-account exposure of a marker in
    your **own test object** is a `manual_review` candidate, never an
@@ -110,13 +112,50 @@ decision. The model can stop; untouched URLs remain `not_selected`, never
 request budget. To compare with the previous per-URL loop, explicitly set
 `"adaptive_planning": false` in a local config.
 
-Model output cannot change the configured URL, parameter, field, method,
-headers, or payload. No configured POST action runs unless `upload` is in
-`enabled_test_kinds`, its URL has a valid `active_tests.upload.field`,
-and live mode is explicitly selected. Apply only where the program permits
-uploads and use a disposable test account. The existing global request budget,
-host/path policy, one-second minimum interval, no-redirect behavior, and
-429/5xx stop still apply.
+For the fixed checks, model output cannot change the configured URL,
+parameter, field, method, headers, or payload. The optional Worker capability
+below allows the model to generate values for explicitly named fields. A
+configured POST action runs only when its test family and exact URL are
+enabled. Apply it to authorized disposable test data. The global request
+budget, host/path policy, one-second minimum interval, no-redirect behavior,
+and 429/5xx stop still apply.
+
+## Model-generated Worker steps
+
+Enable `investigate` and grant a narrow capability per exact URL. The model
+proposes one request at a time, reads redacted response previews, and can
+form a different follow-up request. This example permits three GET steps on
+the named search parameter:
+
+```json
+{
+  "enabled_test_kinds": ["investigate"],
+  "worker_capabilities": {
+    "https://example.test/search?q=sample": {
+      "methods": ["GET"],
+      "query_keys": ["q"],
+      "identities": ["anonymous"],
+      "max_steps": 3
+    }
+  }
+}
+```
+
+For an authorized disposable form, configure its exact URL with
+`"methods": ["POST"]`, `"form_fields": ["query"]`, and an approved
+`identities` entry. The Worker sends URL-encoded form data and can use at
+most five fields and five steps. It cannot select a different host/path,
+add arbitrary fields or headers, use another HTTP method, run shell tools,
+or submit external URLs or destructive SQL strings as values. Values have
+an 80-character limit. Configure POST only for forms whose side effects
+are acceptable in the test environment.
+
+The report records the proposed steps and actual HTTP observations. The
+Worker may link observed evidence IDs into `worker_leads`, which are
+inferences for manual review, not confirmed findings. The Planner can use
+these leads in its next decision. This capability requires global adaptive
+planning (`adaptive_planning` defaults to `true`) and a live run. Offline
+mode still lists it as a candidate without executing requests.
 
 This version uses GPT through the OpenAI Responses API. MCP is optional: the
 same bounded HTTP operations could later be exposed as MCP tools.
