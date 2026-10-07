@@ -144,6 +144,23 @@ class WorkerTests(unittest.TestCase):
             "hypothesis": "x", "procedure": "y", "decision_rule": "z" * 501
         })["decision_rule"]), 500)
 
+    def test_owned_access_candidate_needs_matching_test_marker_and_identity(self):
+        expectation = {"owner": "a", "private_marker": "OWNED_FIXTURE",
+                       "other_account_must_be_denied": True}
+        a = {"action": "worker_get", "status": 200, "identity": "a",
+             "request_fields": [{"key": "id", "value": "1"}],
+             "body_sha256": "same", "owned_marker_present": True}
+        b = {**a, "identity": "b"}
+        lead = adaptive_worker.owned_access_candidate([a, b], expectation)
+        self.assertEqual(lead["evidence_ids"], ["obs-1", "obs-2"])
+        self.assertEqual(lead["confidence"], "observed")
+        self.assertIsNone(adaptive_worker.owned_access_candidate(
+            [a, {**b, "owned_marker_present": False}], expectation))
+        self.assertIsNone(adaptive_worker.owned_access_candidate(
+            [a, {**b, "request_fields": [{"key": "id", "value": "2"}]}], expectation))
+        self.assertIsNone(adaptive_worker.owned_access_candidate(
+            [a, {**b, "body_truncated": True}], expectation))
+
     def test_gpt_and_chatgpt_brief_calls_use_fixed_instructions(self):
         brief = {"hypothesis": "Compare response behavior",
                  "procedure": "Try two approved q values",

@@ -183,6 +183,11 @@ starts the site on `127.0.0.1` with an ephemeral port, generates a test brief,
 requests Alice's note as A and B, and checks the HTTP observations and
 evidence-linked Worker lead. GitHub Actions runs this end-to-end fixture.
 This verifies the HTTP and report path, not real GPT reasoning quality.
+The lab declares note ID 1 as an owned test object with A as owner and B
+excluded. If both accounts receive the configured synthetic marker and the
+same complete response, the report links those observations as an observed
+access-control candidate for manual review. An anonymous 401 alone is not
+a finding.
 
 To try a real model against the same loopback fixture, set `OPENAI_API_KEY`
 in your local environment and add `--auth gpt --model YOUR_MODEL`, or use
@@ -194,7 +199,8 @@ JSONL; the other interactive lab is off by default to limit model calls.
 Real model decisions can stop
 early or choose different approved steps, so inspect the JSONL output for
 the generated brief, observations, and evidence IDs. The intentional flaw
-is a lab fixture; a Worker lead remains a manual-review inference.
+is a lab fixture; even a marker-backed candidate needs human review of the
+intended sharing policy.
 
 This version uses GPT through the OpenAI Responses API. MCP is optional: the
 same bounded HTTP operations could later be exposed as MCP tools.
