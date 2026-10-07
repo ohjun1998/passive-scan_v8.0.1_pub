@@ -669,6 +669,8 @@ class ChatGPTPlanner(GptPlanner):
         with client.responses.create(
             model=self.model, instructions=BRIEF_INSTRUCTIONS,
             input=[{"role": "user", "content": json.dumps(situation, ensure_ascii=False)}],
+            text={"format": {"type": "json_schema", "name": "generated_test_brief",
+                             "strict": True, "schema": TEST_BRIEF_SCHEMA}},
             store=False, stream=True, **self._request_limits(),
         ) as events:
             for event in events:
@@ -1005,6 +1007,8 @@ def run_adaptive(config, candidates, planner, client, output):
         except Exception as exc:
             report["state"] = "request_error"
             report["error"] = type(exc).__name__
+            if action == "investigate" and isinstance(exc, (ValueError, RuntimeError)):
+                report["error_detail"] = sanitize(str(exc))[:160]
             stop_reason = "request_error"
             break
         expectation = config.get("expectations", {}).get(url, {})
