@@ -11,6 +11,7 @@ import urllib.request
 MAX_STEPS = 5
 MAX_VALUE = 80
 MAX_BODY = 16_384
+BRIEF_FIELDS = ("hypothesis", "procedure", "decision_rule")
 BLOCK_VALUE = re.compile(
     r"(?i)(?:https?://|javascript:|data:|\b(?:union|select|sleep|benchmark|drop|alter|insert|update|delete)\b|--|/\*|\*/|[;\r\n\x00])"
 )
@@ -52,6 +53,17 @@ def validate_changes(changes, permitted):
             raise ValueError("Worker parameter outside approved field or value limits")
         result[key] = value
     return result
+
+
+def validate_brief(brief):
+    """Keep the generated prompt as bounded task data, never an execution policy."""
+    if not isinstance(brief, dict) or set(brief) != set(BRIEF_FIELDS):
+        raise ValueError("Invalid generated test brief")
+    if any(not isinstance(brief[key], str) or not brief[key].strip()
+           or len(brief[key]) > 500 or "\x00" in brief[key]
+           for key in BRIEF_FIELDS):
+        raise ValueError("Invalid generated test brief field")
+    return {key: brief[key].strip() for key in BRIEF_FIELDS}
 
 
 def execute_step(client, url, capability, step):
@@ -107,11 +119,25 @@ def execute_step(client, url, capability, step):
         return observation, raw
 
 
-def run_worker(config, url, report, planner, client):
+def run_worker(config, url, report, planner, client, direction="", planner_context=None):
     """Iterate model-proposed steps, stopping on the same global HTTP budget."""
     cap = capabilities(config, url)
     if cap is None:
         raise ValueError("No worker capability for URL")
+    parts = urllib.parse.urlsplit(url)
+    brief_context = {
+        "selected_asset": {"path": parts.path,
+                           "query_keys": [key for key, _ in urllib.parse.parse_qsl(parts.query)],
+                           "categories": report["categories"],
+                           "test_candidates": report["test_candidates"]},
+        "planner_direction": str(direction)[:300],
+        "approved_capability": cap,
+        "prior_facts": report["facts"][-20:],
+        "prior_leads": (report["findings"] + report.get("worker_leads", []))[-20:],
+        "shared_progress": planner_context or {},
+    }
+    brief = validate_brief(planner.draft_test_brief(brief_context))
+    report["test_brief"] = brief
     stop_reason = "step_limit"
     for step_number in range(1, cap["max_steps"] + 1):
         if client.policy.request_count >= client.policy.max_requests:
@@ -126,6 +152,7 @@ def run_worker(config, url, report, planner, client):
         parts = urllib.parse.urlsplit(url)
         situation = {"path": parts.path,
                      "query_keys": [key for key, _ in urllib.parse.parse_qsl(parts.query)],
+                     "generated_test_brief": brief,
                      "capability": cap, "observations": history,
                      "remaining_requests": client.policy.max_requests - client.policy.request_count}
         proposal = planner.propose_step(situation)

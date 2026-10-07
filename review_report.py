@@ -228,6 +228,12 @@ def detail_section(row, number, total):
             f'<a href="#{page_id(number)}-{escape(evidence_id)}">{escape(evidence_id)}</a>'
             for evidence_id in x.get("evidence_ids", [])) + '</div>'
         for x in row.get("worker_leads", [])]
+    brief = row.get("test_brief", {})
+    brief_items = [f'<strong>{title}</strong><div>{escape(brief.get(key, ""))}</div>'
+                   for key, title in (("hypothesis", "검증 가설"),
+                                      ("procedure", "테스트 절차"),
+                                      ("decision_rule", "판단 기준"))
+                   if brief.get(key)]
     observations = "".join(
         f'<tr id="{page_id(number)}-obs-{index}"><td><span class="evidence">obs-{index}</span></td>'
         f'<td>{escape(ACTIONS.get(obs.get("action"), "기타"))}</td><td>{escape(obs.get("status", ""))}</td>'
@@ -246,6 +252,7 @@ def detail_section(row, number, total):
             '<div class="notice">모델 계획은 추론이며, 관찰 근거는 HTTP 응답에서 수집했습니다. 수동 확인 대상은 취약점 확정이 아닙니다.</div>'
             '<div class="detail-grid">'
             f'<section class="panel"><h2>URL에서 도출한 테스트 후보</h2>{listing(candidates)}</section>'
+            f'<section class="panel"><h2>AI가 작성한 테스트 지시문</h2>{listing(brief_items)}</section>'
             f'<section class="panel"><h2>검토 가설</h2>{listing(hypotheses)}</section>'
             f'<section class="panel"><h2>수동 확인 대상</h2>{listing(findings)}</section>'
             f'<section class="panel"><h2>Worker가 제안한 검토 후보</h2>{listing(worker_leads)}</section>'
