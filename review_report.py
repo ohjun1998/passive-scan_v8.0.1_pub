@@ -13,24 +13,46 @@ STATES = {"completed": "검토 완료", "dry_run": "요청 없는 미리보기",
           "halted_on_server_signal": "서버 신호로 중단",
           "not_selected": "계획에서 선택되지 않음"}
 CATEGORIES = {"object_access": "객체 접근", "role_access": "역할별 접근",
-              "input_reflection": "입력값 반사", "basic_response": "기본 응답"}
-FINDINGS = {"reflected_input": "입력값 반사", "access_control": "접근 통제"}
+              "input_reflection": "입력값 반사", "download_access": "파일 다운로드",
+              "basic_response": "기본 응답"}
+FINDINGS = {"reflected_input": "입력값 반사", "xss_execution": "브라우저 스크립트 실행",
+            "access_control": "접근 통제",
+            "download_access": "다운로드 인가",
+            "uploaded_file_exposure": "업로드 파일의 계정 간 노출",
+            "sql_boolean_differential": "SQL 조건 차이"}
 HYPOTHESES = {"not_tested": "미검증", "needs_manual_review": "수동 확인 필요",
               "no_signal_observed": "신호 관찰되지 않음"}
 ACTIONS = {"anonymous": "비로그인", "a": "계정 A", "b": "계정 B",
-           "reflection": "반사 확인", "sql_error": "SQL 오류 신호 확인",
-           "upload": "무해한 텍스트 업로드", "stop": "중단"}
-TESTS = {"access_control": "인가", "reflection": "입력 반사",
-         "sql_error": "SQL 오류 신호", "upload": "파일 업로드"}
+           "reflection": "반사 확인", "xss_browser": "브라우저 XSS 확인",
+           "sql_error": "SQL 오류 신호 확인", "sql_boolean": "SQL 참·거짓 비교",
+           "upload": "무해한 텍스트 업로드", "upload_verify": "업로드 파일 조회",
+           "stop": "중단"}
+TESTS = {"access_control": "인가", "download_access": "다운로드 인가",
+         "reflection": "입력 반사", "xss_browser": "브라우저 XSS 확인",
+         "sql_error": "SQL 오류 신호", "sql_boolean": "SQL 참·거짓 비교",
+         "upload": "파일 업로드",
+         "upload_verify": "업로드 후 조회"}
 HYPOTHESIS_TEXT = {
     "reflected_input": ("무해한 검색 표식이 응답에 나타나는가?",
                         "반사만으로 스크립트 실행 여부를 판단할 수 없습니다."),
+    "xss_execution": ("격리된 브라우저에서 고정 표식의 스크립트가 실행되는가?",
+                      "실행되지 않아도 다른 XSS 경로가 없다는 뜻은 아닙니다."),
     "access_control": ("다른 계정에서 소유자의 테스트 객체 표식을 읽을 수 있는가?",
                        "테스트 객체의 공유 정책은 사람이 확인해야 합니다."),
+    "download_access": ("다른 계정에서 소유한 테스트 파일의 표식을 읽을 수 있는가?",
+                        "파일 소유권과 공유 정책은 사람이 확인해야 합니다."),
+    "uploaded_file_exposure": ("다른 계정에서 방금 올린 테스트 파일을 읽을 수 있는가?",
+                               "설정된 조회 URL과 공유 정책을 확인해야 합니다."),
+    "sql_boolean_differential": ("소유한 테스트 표식이 참·거짓 조건에 따라 반복적으로 달라지는가?",
+                                 "차이가 실제 SQL 처리 때문인지는 사람이 확인해야 합니다."),
 }
 FINDING_TEXT = {
-    "reflected_input": "무해한 표식의 반사가 관찰됐습니다. 스크립트 실행 여부는 확인하지 않았습니다.",
+    "reflected_input": "무해한 표식이 반사됐습니다. 실행 여부는 별도 브라우저 검사 결과를 확인하세요.",
+    "xss_execution": "수집한 HTML을 격리된 브라우저에서 렌더링하자 고정 표식의 실행이 관찰됐습니다.",
     "access_control": "다른 신원에도 소유자의 테스트 표식이 반환됐습니다. 의도한 공유 정책을 확인하세요.",
+    "download_access": "다른 신원이 소유한 테스트 파일의 표식을 읽었습니다. 공유 정책을 확인하세요.",
+    "uploaded_file_exposure": "다른 신원이 방금 올린 테스트 파일의 표식을 읽었습니다. 공유 정책을 확인하세요.",
+    "sql_boolean_differential": "소유한 테스트 표식이 반복된 참·거짓 조건에 따라 달라졌습니다. SQL 처리 여부를 확인하세요.",
 }
 PLAN_TEXT = {"anonymous": "비로그인 상태의 응답 확인", "a": "계정 A의 응답 확인",
              "b": "계정 B의 응답 확인", "reflection": "검색 표식의 반사 확인",

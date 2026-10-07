@@ -27,7 +27,8 @@ MAX_REQUESTS = 100
 MAX_BODY = 16_384
 REFLECTION_KEYS = {"q", "query", "search", "term", "keyword"}
 SQL_KEYS = {"id", "item", "user", "order", "q", "search", "filter"}
-TEST_KINDS = {"access_control", "reflection", "sql_error", "upload"}
+TEST_KINDS = {"access_control", "download_access", "reflection",
+              "xss_browser", "sql_error", "sql_boolean", "upload", "upload_verify"}
 BLOCKED_PARTS = re.compile(
     r"(?:^|[/_-])(logout|signout|delete|remove|revoke|destroy|purchase|checkout|pay|transfer)(?:[/_.-]|$)",
     re.IGNORECASE,
@@ -167,7 +168,8 @@ class HttpClient:
                 "status": status,
                 "content_type": response.headers.get("Content-Type", "")[:120],
                 "headers": {k: response.headers.get(k, "")[:120] for k in
-                            ("Content-Security-Policy", "X-Content-Type-Options", "Cache-Control")},
+                            ("Content-Security-Policy", "X-Content-Type-Options",
+                             "Cache-Control", "Content-Disposition")},
                 "body_sha256": hashlib.sha256(raw).hexdigest(),
                 "body_length_at_least": len(raw),
                 "body_truncated": len(raw) > MAX_BODY,
@@ -179,7 +181,34 @@ class HttpClient:
     def configured_test(self, url, kind, settings):
         """Run one explicitly configured, bounded probe on the exact URL."""
         parts = self.policy.validate(url, resolve=True, live=True)
-        if kind == "sql_error":
+        if kind == "sql_boolean":
+            return self.boolean_probe(url, settings)
+        if kind == "upload_verify":
+            target = settings.get("verify_url")
+            if not isinstance(target, str):
+                raise ValueError("Upload verification requires an exact URL")
+            self.policy.validate(target, resolve=True, live=True)
+            marker = settings.get("marker")
+            if not isinstance(marker, str) or not re.fullmatch(r"review-[0-9a-f]{12}", marker):
+                raise ValueError("Missing generated upload marker")
+            identity = settings.get("verify_identity", "anonymous")
+            observation, raw = self.fetch(target, identity=identity)
+            observation["action"] = "upload_verify"
+            observation["identity"] = identity
+            observation["upload_marker_present"] = marker.encode() in raw
+            return observation, raw
+        marker = ""
+        if kind == "xss_browser":
+            key = settings.get("parameter")
+            pairs = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+            if not isinstance(key, str) or key.lower() not in REFLECTION_KEYS or key not in [k for k, _ in pairs]:
+                raise ValueError("XSS browser check requires a named existing search parameter")
+            marker = "review-" + uuid.uuid4().hex[:12]
+            canary = f'<svg onload="window.__passiveScanCanary=\'{marker}\'"></svg>'
+            pairs = [(k, canary if k == key else v) for k, v in pairs]
+            target = urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(pairs)))
+            method, body, content_type = "GET", None, None
+        elif kind == "sql_error":
             if settings.get("identity", "anonymous") != "anonymous":
                 raise ValueError("SQL baseline comparison requires anonymous identity")
             key = settings.get("parameter")
@@ -226,18 +255,109 @@ class HttpClient:
         with response:
             raw = response.read(MAX_BODY + 1)
             status = response.status if hasattr(response, "status") else response.code
-            return {"action": kind, "url": parts._replace(query="").geturl(),
+            result = {"action": kind, "url": parts._replace(query="").geturl(),
                     "status": status, "content_type": response.headers.get("Content-Type", "")[:120],
                     "headers": {}, "body_sha256": hashlib.sha256(raw).hexdigest(),
                     "body_length_at_least": len(raw), "body_truncated": len(raw) > MAX_BODY,
                     "preview": sanitize(raw[:1200].decode("utf-8", "replace")),
-                    "method": method}, raw
+                    "method": method}
+            if kind == "upload":
+                result["upload_marker"] = marker
+                result["identity"] = identity
+            if kind == "xss_browser":
+                result["script_executed"] = False
+                if (status == 200 and len(raw) <= MAX_BODY
+                        and "text/html" in result["content_type"].lower()):
+                    result["script_executed"] = browser_canary(
+                        target, raw, marker, result["content_type"],
+                        response.headers.get("Content-Security-Policy", ""))
+            return result, raw
+
+    def boolean_probe(self, url, settings):
+        """Compare two fixed read-only conditions twice against an owned marker."""
+        parts = self.policy.validate(url, resolve=True, live=True)
+        key = settings.get("parameter")
+        marker = settings.get("expected_marker")
+        pairs = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+        matches = [value for k, value in pairs if k == key]
+        if (not isinstance(key, str) or key.lower() not in SQL_KEYS
+                or not isinstance(marker, str) or not marker
+                or len(marker) > 100 or
+                len(matches) != 1 or not re.fullmatch(r"[0-9]{1,12}", matches[0])):
+            raise ValueError("Boolean check requires one numeric query parameter and an owned marker")
+        if self.policy.max_requests - self.policy.request_count < 4:
+            raise RuntimeError("Four HTTP requests required for the boolean comparison")
+        checks = []
+        for condition, suffix in (("true", " AND 1=1"), ("false", " AND 1=2"),
+                                  ("false", " AND 1=2"), ("true", " AND 1=1")):
+            changed = [(k, value + suffix if k == key else value) for k, value in pairs]
+            target = urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(changed)))
+            self.policy.validate(target, resolve=True, live=True)
+            self.policy.budget(parts.hostname.lower())
+            request = urllib.request.Request(
+                target, headers={"User-Agent": "PassiveScan-Authorized-AI-Review/0.1",
+                                 "Accept": "text/html,application/json"}, method="GET")
+            try:
+                response = self.opener.open(request, timeout=5)
+            except urllib.error.HTTPError as exc:
+                response = exc
+            with response:
+                raw = response.read(MAX_BODY + 1)
+                status = response.status if hasattr(response, "status") else response.code
+                checks.append({"condition": condition, "status": status,
+                               "body_sha256": hashlib.sha256(raw).hexdigest(),
+                               "marker_present": marker.encode() in raw,
+                               "body_truncated": len(raw) > MAX_BODY})
+            if status == 429 or status >= 500:
+                break
+        signal = (len(checks) == 4
+                  and all(check["status"] == 200 and not check["body_truncated"]
+                          and check["marker_present"] == (check["condition"] == "true")
+                          for check in checks))
+        result = {"action": "sql_boolean", "url": parts._replace(query="").geturl(),
+                  "status": checks[-1]["status"], "content_type": "", "headers": {},
+                  "body_sha256": hashlib.sha256(json.dumps(checks).encode()).hexdigest(),
+                  "body_length_at_least": 0, "body_truncated": False,
+                  "preview": "", "checks": checks, "sql_differential": signal,
+                  "method": "GET"}
+        return result, b""
+
+
+def browser_canary(target, body, marker, content_type, csp):
+    """Render the captured response at its origin with all browser network blocked."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        raise RuntimeError("Optional Playwright and Chromium are required for xss_browser") from exc
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            context = browser.new_context(service_workers="block")
+            def serve_captured(route):
+                if route.request.url == target and route.request.is_navigation_request():
+                    headers = {"Content-Type": content_type}
+                    if csp:
+                        headers["Content-Security-Policy"] = csp
+                    route.fulfill(status=200, headers=headers, body=body)
+                else:
+                    route.abort()
+            context.route("**/*", serve_captured)
+            context.route_web_socket("**/*", lambda ws: ws.close())
+            page = context.new_page()
+            page.goto(target, wait_until="domcontentloaded", timeout=5000)
+            page.wait_for_timeout(500)
+            executed = page.evaluate("window.__passiveScanCanary || null") == marker
+            context.close()
+            return executed
+        finally:
+            browser.close()
 
 
 SCHEMA = {
     "type": "object", "properties": {
         "action": {"type": "string", "enum": ["anonymous", "a", "b", "reflection",
-                                              "sql_error", "upload", "stop"]},
+                                              "xss_browser", "sql_error", "sql_boolean", "upload",
+                                              "upload_verify", "stop"]},
         "reason": {"type": "string"},
     }, "required": ["action", "reason"], "additionalProperties": False,
 }
@@ -246,8 +366,11 @@ ACTION_DESCRIPTIONS = {
     "a": "Exact-URL GET with configured test account A.",
     "b": "Exact-URL GET with configured test account B.",
     "reflection": "Harmless marker in an existing search query.",
+    "xss_browser": "Render a captured HTML response with a fixed inert canary; browser network is blocked.",
     "sql_error": "One apostrophe syntax probe in a configured query parameter after a healthy baseline; an error is only a review signal.",
+    "sql_boolean": "Four read-only true/false checks against an owned marker; differences require human review.",
     "upload": "One configured plain-text .txt upload; acceptance alone is not a vulnerability.",
+    "upload_verify": "Fetch the exact configured readback URL and compare the generated test marker.",
 }
 
 
@@ -446,31 +569,47 @@ def test_candidates(url, config):
     def add(kind, signal, prerequisite, ready):
         result.append({"kind": kind, "signal": signal, "prerequisite": prerequisite,
                        "status": "ready" if ready else "needs_configuration"})
-    if "object_access" in classify(url) or "role_access" in classify(url):
+    if any(kind in classify(url) for kind in ("object_access", "role_access", "download_access")):
         exp = config.get("expectations", {}).get(url, {})
-        add("access_control", "객체 또는 역할 경로",
+        kind = "download_access" if "download_access" in classify(url) else "access_control"
+        add(kind, "소유 파일 경로" if kind == "download_access" else "객체 또는 역할 경로",
             "테스트 계정 A/B, 소유 테스트 객체, 기대 접근 정책",
             bool(exp.get("private_marker") and exp.get("owner") in ("a", "b")
                  and exp.get("other_account_must_be_denied") is True))
     if keys & REFLECTION_KEYS:
         add("reflection", "검색 매개변수", "기존 검색 매개변수", True)
+        add("xss_browser", "HTML 응답의 검색 입력 반사",
+            "기존 검색 매개변수, active_tests.xss_browser.parameter, Playwright",
+            bool(settings.get("xss_browser", {}).get("parameter") in
+                 [k for k, _ in urllib.parse.parse_qsl(parts.query)]))
     if keys & SQL_KEYS or re.search(r"/(?:api/)?(?:search|items|products|orders)(?:/|$)", path):
         add("sql_error", "조회 경로 또는 식별자 매개변수",
             "해당 URL의 기존 조회 매개변수와 active_tests.sql_error.parameter",
             bool(settings.get("sql_error", {}).get("parameter") in
                  [k for k, _ in urllib.parse.parse_qsl(parts.query)]
                  and settings.get("sql_error", {}).get("parameter", "").lower() in SQL_KEYS))
+        parameter = settings.get("sql_boolean", {}).get("parameter")
+        add("sql_boolean", "숫자 조회 매개변수",
+            "소유한 테스트 데이터의 sql_marker, 숫자 매개변수, 요청 4회",
+            bool(parameter and parameter.lower() in SQL_KEYS
+                 and any(k == parameter and re.fullmatch(r"[0-9]{1,12}", value)
+                         for k, value in urllib.parse.parse_qsl(parts.query))
+                 and config.get("expectations", {}).get(url, {}).get("sql_marker")))
     if re.search(r"/(?:upload|attachments|files)(?:/|$)", path):
         add("upload", "업로드 관련 경로", "정확한 업로드 URL과 active_tests.upload.field",
             bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,39}",
                               str(settings.get("upload", {}).get("field", ""))) and not parts.query))
+        if settings.get("upload", {}).get("verify_url"):
+            add("upload_verify", "업로드 후 조회 경로",
+                "active_tests.upload.verify_url, 생성된 업로드 표식",
+                bool(settings.get("upload", {}).get("field")))
     return result
 
 
 def available_actions(url, credentials, tried, config=None):
     actions = ["anonymous"]
     enabled = set(config.get("enabled_test_kinds", [])) if config and "enabled_test_kinds" in config else None
-    if enabled is None or "access_control" in enabled:
+    if enabled is None or {"access_control", "download_access"} & enabled:
         actions.extend(k for k in ("a", "b") if credentials.get(k))
     pairs = urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query, keep_blank_values=True)
     if (enabled is None or "reflection" in enabled) and any(key.lower() in REFLECTION_KEYS for key, _ in pairs):
@@ -479,11 +618,17 @@ def available_actions(url, credentials, tried, config=None):
         enabled = (enabled or set()) & TEST_KINDS
         for candidate in test_candidates(url, config):
             if candidate["status"] == "ready" and candidate["kind"] in enabled:
-                if candidate["kind"] in ("sql_error", "upload"):
+                if candidate["kind"] in ("sql_error", "sql_boolean", "upload", "upload_verify", "xss_browser"):
                     actions.append(candidate["kind"])
     # The error probe must have a healthy baseline for comparison.
     if "anonymous" not in tried and "sql_error" in actions:
         actions.remove("sql_error")
+    if "anonymous" not in tried and "sql_boolean" in actions:
+        actions.remove("sql_boolean")
+    if "reflection" not in tried and "xss_browser" in actions:
+        actions.remove("xss_browser")
+    if "upload" not in tried and "upload_verify" in actions:
+        actions.remove("upload_verify")
     return [a for a in actions if a not in tried]
 
 
@@ -495,6 +640,8 @@ def classify(url):
         kinds.append("object_access")
     if "/admin" in path:
         kinds.append("role_access")
+    if re.search(r"/(?:download|attachments|files)(?:/|$)", path):
+        kinds.append("download_access")
     if any(k.lower() in REFLECTION_KEYS for k, _ in urllib.parse.parse_qsl(parts.query)):
         kinds.append("input_reflection")
     return kinds or ["basic_response"]
@@ -515,11 +662,23 @@ def hypotheses_for(url, expectation):
         hypotheses.append({"kind": "reflected_input", "status": "not_tested",
                            "question": "Does a harmless search marker occur in the response?",
                            "limit": "Reflection alone does not demonstrate script execution."})
+        hypotheses.append({"kind": "xss_execution", "status": "not_tested",
+                           "question": "Does a fixed canary execute in a browser rendering the captured response?",
+                           "limit": "An absent signal does not establish that the page is free from XSS."})
     if (expectation.get("owner") in ("a", "b") and expectation.get("private_marker")
             and expectation.get("other_account_must_be_denied") is True):
-        hypotheses.append({"kind": "access_control", "status": "not_tested",
+        kind = "download_access" if "download_access" in classify(url) else "access_control"
+        hypotheses.append({"kind": kind, "status": "not_tested",
                            "question": "Can another identity read the owner's own test marker?",
                            "limit": "The test object and expected sharing rule require human confirmation."})
+    if expectation.get("uploaded_file_must_be_private") is True:
+        hypotheses.append({"kind": "uploaded_file_exposure", "status": "not_tested",
+                           "question": "Can another identity read the newly uploaded test file?",
+                           "limit": "An exact readback URL and the intended sharing policy are required."})
+    if expectation.get("sql_marker"):
+        hypotheses.append({"kind": "sql_boolean_differential", "status": "not_tested",
+                           "question": "Does an owned test marker track repeated true/false read-only conditions?",
+                           "limit": "Differential behavior needs human confirmation of SQL semantics."})
     return hypotheses
 
 
@@ -529,6 +688,9 @@ def observed_facts(observations):
              "action": obs["action"], "http_status": obs["status"],
              "body_sha256": obs["body_sha256"],
              "marker_reflected": bool(obs.get("marker_reflected")),
+             "script_executed": bool(obs.get("script_executed")),
+             "upload_marker_present": bool(obs.get("upload_marker_present")),
+             "sql_differential": bool(obs.get("sql_differential")),
              "test_marker_present": bool(obs.get("marker_present"))}
             for index, obs in enumerate(observations, 1)]
 
@@ -543,25 +705,56 @@ def update_hypotheses(hypotheses, observations, findings, expectation):
         elif (kind == "reflected_input" and "reflection" in by_action
               and 200 <= by_action["reflection"]["status"] < 400):
             hypothesis["status"] = "no_signal_observed"
-        elif kind == "access_control":
+        elif kind == "xss_execution" and "xss_browser" in by_action:
+            hypothesis["status"] = "no_signal_observed"
+        elif (kind == "uploaded_file_exposure" and "upload_verify" in by_action
+              and by_action["upload_verify"]["status"] < 500):
+            hypothesis["status"] = "no_signal_observed"
+        elif (kind == "sql_boolean_differential" and "sql_boolean" in by_action
+              and len(by_action["sql_boolean"].get("checks", [])) == 4):
+            hypothesis["status"] = "no_signal_observed"
+        elif kind in ("access_control", "download_access"):
             owner = expectation["owner"]
             other = "b" if owner == "a" else "a"
             comparisons = [by_action[action] for action in (other, "anonymous")
                            if action in by_action and by_action[action]["status"] < 500]
             if (by_action.get(owner, {}).get("status") == 200
-                    and by_action[owner].get("marker_present") and comparisons):
+                    and by_action[owner].get("marker_present")
+                    and not by_action[owner].get("body_truncated")
+                    and comparisons and all(not obs.get("body_truncated") for obs in comparisons)):
                 hypothesis["status"] = "no_signal_observed"
 
 
-def assess(observations, expectation):
+def assess(observations, expectation, url=None):
     by_action = {entry["action"]: (f"obs-{index}", entry)
                  for index, entry in enumerate(observations, 1)}
     findings = []
     reflection_id, reflection = by_action.get("reflection", (None, {}))
     if reflection.get("marker_reflected") and 200 <= reflection["status"] < 400:
         findings.append({"kind": "reflected_input", "status": "manual_review",
-                         "reason": "A harmless marker was reflected; script execution was not checked.",
+                         "reason": "A harmless marker was reflected; refer to the separate browser check for execution evidence.",
                          "evidence_ids": [reflection_id]})
+    xss_id, xss = by_action.get("xss_browser", (None, {}))
+    if xss.get("script_executed") and xss.get("status") == 200:
+        findings.append({"kind": "xss_execution", "status": "manual_review",
+                         "reason": "A fixed canary executed in an isolated browser rendering the captured response.",
+                         "evidence_ids": [xss_id]})
+    upload_id, upload = by_action.get("upload", (None, {}))
+    verify_id, verify = by_action.get("upload_verify", (None, {}))
+    if (upload.get("status") in (200, 201, 202, 204)
+            and verify.get("status") == 200 and verify.get("upload_marker_present")
+            and upload.get("identity") != verify.get("identity")
+            and expectation.get("uploaded_file_must_be_private") is True):
+        findings.append({"kind": "uploaded_file_exposure", "status": "manual_review",
+                         "reason": "Another identity read the newly uploaded test marker; verify sharing policy.",
+                         "evidence_ids": [upload_id, verify_id]})
+    baseline_id, baseline = by_action.get("anonymous", (None, {}))
+    sql_id, sql = by_action.get("sql_boolean", (None, {}))
+    if (baseline.get("status") == 200 and baseline.get("sql_marker_present")
+            and sql.get("sql_differential")):
+        findings.append({"kind": "sql_boolean_differential", "status": "manual_review",
+                         "reason": "An owned marker followed repeated true/false read-only query conditions.",
+                         "evidence_ids": [baseline_id, sql_id]})
     if expectation:
         owner = expectation.get("owner")
         marker = expectation.get("private_marker", "")
@@ -572,10 +765,27 @@ def assess(observations, expectation):
                 for label, pair in (("other_account", by_action.get("b" if owner == "a" else "a")),
                                     ("anonymous", by_action.get("anonymous"))):
                     if pair and pair[1]["status"] == 200 and pair[1].get("marker_present"):
-                        findings.append({"kind": "access_control", "status": "manual_review",
+                        kind = ("download_access" if url and
+                                "download_access" in classify(url) else "access_control")
+                        findings.append({"kind": kind, "status": "manual_review",
                                          "reason": f"Own test-object marker also returned to {label}; verify sharing policy.",
                                          "evidence_ids": [owner_pair[0], pair[0]]})
     return findings
+
+
+def execute_action(config, url, action, report, client):
+    if action == "upload_verify":
+        settings = dict(config["active_tests"][url]["upload"])
+        upload = next(obs for obs in report["observations"] if obs["action"] == "upload")
+        settings["marker"] = upload["upload_marker"]
+        return client.configured_test(url, action, settings)
+    if action in ("sql_error", "sql_boolean", "upload", "xss_browser"):
+        settings = dict(config["active_tests"][url][action])
+        if action == "sql_boolean":
+            settings["expected_marker"] = config["expectations"][url]["sql_marker"]
+        return client.configured_test(url, action, settings)
+    return client.fetch(url, identity="anonymous" if action == "reflection" else action,
+                        reflection=action == "reflection")
 
 
 def run_adaptive(config, candidates, planner, client, output):
@@ -603,7 +813,20 @@ def run_adaptive(config, candidates, planner, client, output):
             actions = available_actions(url, client.credentials, tried[index - 1], config)
             if not any(obs["action"] == "anonymous" and 200 <= obs["status"] < 400
                        for obs in report["observations"]):
-                actions = [action for action in actions if action != "sql_error"]
+                actions = [action for action in actions if action not in ("sql_error", "sql_boolean")]
+            if not any(obs["action"] == "anonymous" and obs.get("sql_marker_present")
+                       and obs["status"] == 200 for obs in report["observations"]):
+                actions = [action for action in actions if action != "sql_boolean"]
+            if policy.max_requests - policy.request_count < 4:
+                actions = [action for action in actions if action != "sql_boolean"]
+            if not any(obs["action"] == "reflection" and obs.get("marker_reflected")
+                       and obs["status"] == 200 and "text/html" in obs["content_type"].lower()
+                       for obs in report["observations"]):
+                actions = [action for action in actions if action != "xss_browser"]
+            if not any(obs["action"] == "upload" and obs.get("upload_marker")
+                       and obs["status"] in (200, 201, 202, 204)
+                       for obs in report["observations"]):
+                actions = [action for action in actions if action != "upload_verify"]
             options.extend((f"asset-{index}:{action}", action) for action in actions)
         if not options:
             break
@@ -637,13 +860,7 @@ def run_adaptive(config, candidates, planner, client, output):
                                             "manual_review_candidates": len(situation["manual_review_candidates"])}})
         tried[index].add(action)
         try:
-            if action in ("sql_error", "upload"):
-                observation, raw = client.configured_test(
-                    url, action, config["active_tests"][url][action])
-            else:
-                observation, raw = client.fetch(
-                    url, identity="anonymous" if action == "reflection" else action,
-                    reflection=action == "reflection")
+            observation, raw = execute_action(config, url, action, report, client)
         except Exception as exc:
             report["state"] = "request_error"
             report["error"] = type(exc).__name__
@@ -652,10 +869,12 @@ def run_adaptive(config, candidates, planner, client, output):
         expectation = config.get("expectations", {}).get(url, {})
         observation["marker_present"] = bool(
             expectation.get("private_marker") and expectation["private_marker"].encode() in raw)
+        observation["sql_marker_present"] = bool(
+            expectation.get("sql_marker") and expectation["sql_marker"].encode() in raw)
         report["observations"].append(observation)
         report["state"] = "completed"
         report["facts"] = observed_facts(report["observations"])
-        report["findings"] = assess(report["observations"], expectation)
+        report["findings"] = assess(report["observations"], expectation, url)
         update_hypotheses(report["hypotheses"], report["observations"],
                           report["findings"], expectation)
         if observation["status"] == 429 or observation["status"] >= 500:
@@ -713,7 +932,20 @@ def run(config, urls, planner, client, output, live=False):
                     available = available_actions(url, client.credentials, tried, config)
                     if not any(obs["action"] == "anonymous" and 200 <= obs["status"] < 400
                                for obs in report["observations"]):
-                        available = [a for a in available if a != "sql_error"]
+                        available = [a for a in available if a not in ("sql_error", "sql_boolean")]
+                    if not any(obs["action"] == "anonymous" and obs.get("sql_marker_present")
+                               and obs["status"] == 200 for obs in report["observations"]):
+                        available = [a for a in available if a != "sql_boolean"]
+                    if policy.max_requests - policy.request_count < 4:
+                        available = [a for a in available if a != "sql_boolean"]
+                    if not any(obs["action"] == "reflection" and obs.get("marker_reflected")
+                               and obs["status"] == 200 and "text/html" in obs["content_type"].lower()
+                               for obs in report["observations"]):
+                        available = [a for a in available if a != "xss_browser"]
+                    if not any(obs["action"] == "upload" and obs.get("upload_marker")
+                               and obs["status"] in (200, 201, 202, 204)
+                               for obs in report["observations"]):
+                        available = [a for a in available if a != "upload_verify"]
                     if not available:
                         break
                     try:
@@ -730,13 +962,7 @@ def run(config, urls, planner, client, output, live=False):
                         break
                     tried.add(action)
                     try:
-                        if action in ("sql_error", "upload"):
-                            settings = config["active_tests"][url][action]
-                            observation, raw = client.configured_test(url, action, settings)
-                        else:
-                            observation, raw = client.fetch(
-                                url, identity="anonymous" if action == "reflection" else action,
-                                reflection=action == "reflection")
+                        observation, raw = execute_action(config, url, action, report, client)
                     except Exception as exc:
                         report["state"] = "request_error"
                         report["error"] = type(exc).__name__
@@ -745,12 +971,14 @@ def run(config, urls, planner, client, output, live=False):
                         expectation.get("private_marker") and
                         expectation["private_marker"].encode() in raw
                     )
+                    observation["sql_marker_present"] = bool(
+                        expectation.get("sql_marker") and expectation["sql_marker"].encode() in raw)
                     report["observations"].append(observation)
                     if observation["status"] == 429 or observation["status"] >= 500:
                         report["state"] = "halted_on_server_signal"
                         break
                 report["facts"] = observed_facts(report["observations"])
-                report["findings"] = assess(report["observations"], expectation)
+                report["findings"] = assess(report["observations"], expectation, url)
                 update_hypotheses(report["hypotheses"], report["observations"],
                                   report["findings"], expectation)
             stream.write(json.dumps(report, ensure_ascii=False) + "\n")

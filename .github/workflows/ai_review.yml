@@ -77,6 +77,13 @@ jobs:
       - name: Install GPT dependency
         if: inputs.live
         run: python3 -m pip install openai cryptography
+      - name: Install optional isolated browser verifier
+        if: inputs.live
+        run: |
+          if python3 -c 'import json; c=json.load(open("ai_review.config.json")); raise SystemExit(0 if "xss_browser" in c.get("enabled_test_kinds", []) else 1)'; then
+            python3 -m pip install playwright
+            python3 -m playwright install --with-deps chromium
+          fi
       - name: Restore protected ChatGPT session
         id: restore_session
         if: inputs.live && inputs.auth == 'chatgpt'
