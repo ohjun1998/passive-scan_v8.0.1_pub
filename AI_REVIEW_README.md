@@ -167,6 +167,30 @@ structured output contract; the model writes the test-specific brief and
 request sequence, not a replacement system prompt. No real-model behavior
 or external target was validated by the local unit tests.
 
+### Deliberately vulnerable interactive lab
+
+`tests/web_lab_site.py` has a loopback-only `/lab/private-note?id=1`
+fixture. Alice owns a synthetic note, but the fixture deliberately returns
+its marker to Bob's test account too. The ordinary login, board and search
+flows remain the same. Run:
+
+```bash
+python3 tests/lab_vulnerable_worker.py --output /tmp/lab_vulnerable_worker.jsonl
+```
+
+The default mode mocks GPT responses through the real Planner adapter. It
+starts the site on `127.0.0.1` with an ephemeral port, generates a test brief,
+requests Alice's note as A and B, and checks the HTTP observations and
+evidence-linked Worker lead. GitHub Actions runs this end-to-end fixture.
+This verifies the HTTP and report path, not real GPT reasoning quality.
+
+To try a real model against the same loopback fixture, set `OPENAI_API_KEY`
+in your local environment and add `--auth gpt --model YOUR_MODEL`, or use
+`--auth chatgpt` after local ChatGPT sign-in. Real model decisions can stop
+early or choose different approved steps, so inspect the JSONL output for
+the generated brief, observations, and evidence IDs. The intentional flaw
+is a lab fixture; a Worker lead remains a manual-review inference.
+
 This version uses GPT through the OpenAI Responses API. MCP is optional: the
 same bounded HTTP operations could later be exposed as MCP tools.
 

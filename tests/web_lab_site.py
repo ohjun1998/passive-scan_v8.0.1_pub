@@ -14,6 +14,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 
+OWNED_NOTE_MARKER = "ALICE_OWNED_LAB_NOTE_7F2C"
+
+
 class LabState:
     def __init__(self):
         self.lock = threading.Lock()
@@ -115,6 +118,18 @@ class Handler(BaseHTTPRequestHandler):
             query = parse_qs(parts.query).get("q", [""])[0]
             return self.page("Search", '<form><input name="q"><button>Search</button></form>'
                              '<p>Results for ' + html.escape(query) + '</p>')
+        if path == "/lab/private-note":
+            # Deliberately vulnerable, isolated fixture: Bob can retrieve Alice's
+            # synthetic note. Never use this route outside the loopback lab.
+            bearer = self.headers.get("Authorization", "")
+            if bearer not in ("Bearer lab-account-a", "Bearer lab-account-b"):
+                return self.send(401, '{"error":"authentication required"}',
+                                 "application/json")
+            if parse_qs(parts.query).get("id") != ["1"]:
+                return self.send(404, '{"error":"note not found"}', "application/json")
+            return self.send(200, json.dumps({"id": 1, "owner": "alice",
+                                              "note": OWNED_NOTE_MARKER}),
+                             "application/json")
         return self.page("Not found", "", 404)
 
     def do_POST(self):
