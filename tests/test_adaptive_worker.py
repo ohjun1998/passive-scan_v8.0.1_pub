@@ -105,10 +105,12 @@ class WorkerTests(unittest.TestCase):
 
     def test_malformed_generated_brief_fails_closed(self):
         for brief in ({"hypothesis": "x"},
-                      {"hypothesis": "x", "procedure": "y", "decision_rule": "z" * 501},
                       {"hypothesis": "x", "procedure": "", "decision_rule": "z"}):
             with self.assertRaises(ValueError):
                 adaptive_worker.validate_brief(brief)
+        self.assertEqual(len(adaptive_worker.validate_brief({
+            "hypothesis": "x", "procedure": "y", "decision_rule": "z" * 501
+        })["decision_rule"]), 500)
 
     def test_gpt_and_chatgpt_brief_calls_use_fixed_instructions(self):
         brief = {"hypothesis": "Compare response behavior",

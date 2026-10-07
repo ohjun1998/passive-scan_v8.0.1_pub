@@ -59,11 +59,11 @@ def validate_brief(brief):
     """Keep the generated prompt as bounded task data, never an execution policy."""
     if not isinstance(brief, dict) or set(brief) != set(BRIEF_FIELDS):
         raise ValueError("Invalid generated test brief")
-    if any(not isinstance(brief[key], str) or not brief[key].strip()
-           or len(brief[key]) > 500 or "\x00" in brief[key]
-           for key in BRIEF_FIELDS):
-        raise ValueError("Invalid generated test brief field")
-    return {key: brief[key].strip() for key in BRIEF_FIELDS}
+    for key in BRIEF_FIELDS:
+        if (not isinstance(brief[key], str) or not brief[key].strip()
+                or "\x00" in brief[key]):
+            raise ValueError("Invalid generated test brief field: " + key)
+    return {key: brief[key].strip()[:500] for key in BRIEF_FIELDS}
 
 
 def execute_step(client, url, capability, step):
