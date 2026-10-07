@@ -123,9 +123,14 @@ and 429/5xx stop still apply.
 ## Model-generated Worker steps
 
 Enable `investigate` and grant a narrow capability per exact URL. The model
-proposes one request at a time, reads redacted response previews, and can
-form a different follow-up request. This example permits three GET steps on
-the named search parameter:
+first writes a new test brief from the selected asset, Planner direction,
+prior facts, manual-review leads, and shared progress. That brief contains
+a falsifiable hypothesis, a proposed comparison procedure, and a decision
+rule. The Worker then uses the brief as task data, proposes one request at a
+time, reads redacted response previews, and can form a different follow-up
+request. The generated brief is visible in the HTML report and cannot change
+the configured execution policy. This example permits three GET steps on the
+named search parameter:
 
 ```json
 {
@@ -150,12 +155,17 @@ or submit external URLs or destructive SQL strings as values. Values have
 an 80-character limit. Configure POST only for forms whose side effects
 are acceptable in the test environment.
 
-The report records the proposed steps and actual HTTP observations. The
+The report records the generated brief, proposed steps and actual HTTP observations. The
 Worker may link observed evidence IDs into `worker_leads`, which are
 inferences for manual review, not confirmed findings. The Planner can use
 these leads in its next decision. This capability requires global adaptive
 planning (`adaptive_planning` defaults to `true`) and a live run. Offline
 mode still lists it as a candidate without executing requests.
+Generating the brief adds one GPT call per selected `investigate` intent.
+The Planner and Worker still use fixed higher-priority instructions and a
+structured output contract; the model writes the test-specific brief and
+request sequence, not a replacement system prompt. No real-model behavior
+or external target was validated by the local unit tests.
 
 This version uses GPT through the OpenAI Responses API. MCP is optional: the
 same bounded HTTP operations could later be exposed as MCP tools.

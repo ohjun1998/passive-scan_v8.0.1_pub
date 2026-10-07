@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 from unittest.mock import patch
 
@@ -40,10 +41,17 @@ class Opener:
 class Planner:
     def __init__(self):
         self.worker_contexts = []
+        self.brief_context = None
 
     def choose_intent(self, situation, options):
         return {"intent_id": next(key for key, action in options if action == "investigate"),
                 "reason": "Investigate this search flow"}
+
+    def draft_test_brief(self, situation):
+        self.brief_context = situation
+        return {"hypothesis": "The search endpoint treats special text differently",
+                "procedure": "Compare a syntax marker and an ordinary value in q",
+                "decision_rule": "Review differing status or response structure"}
 
     def propose_step(self, situation):
         self.worker_contexts.append(situation)
@@ -86,10 +94,53 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(result["requests"], 2)
         self.assertEqual(len(opener.requests), 2)
         self.assertEqual(len(planner.worker_contexts[1]["observations"]), 1)
+        self.assertEqual(planner.brief_context["planner_direction"], "Investigate this search flow")
+        self.assertEqual(planner.worker_contexts[0]["generated_test_brief"], row["test_brief"])
+        self.assertIn("assets", planner.brief_context["shared_progress"])
         self.assertEqual(row["worker_leads"][0]["evidence_ids"], ["obs-1", "obs-2"])
         self.assertEqual(row["worker_leads"][0]["confidence"], "inferred")
         self.assertEqual(row["findings"], [])
         self.assertIn("Worker가 제안한 검토 후보", review_report.detail_section(row, 1, 1))
+        self.assertIn("AI가 작성한 테스트 지시문", review_report.detail_section(row, 1, 1))
+
+    def test_malformed_generated_brief_fails_closed(self):
+        for brief in ({"hypothesis": "x"},
+                      {"hypothesis": "x", "procedure": "y", "decision_rule": "z" * 501},
+                      {"hypothesis": "x", "procedure": "", "decision_rule": "z"}):
+            with self.assertRaises(ValueError):
+                adaptive_worker.validate_brief(brief)
+
+    def test_gpt_and_chatgpt_brief_calls_use_fixed_instructions(self):
+        brief = {"hypothesis": "Compare response behavior",
+                 "procedure": "Try two approved q values",
+                 "decision_rule": "Inspect the observed difference"}
+        gpt = ai_review.GptPlanner.__new__(ai_review.GptPlanner)
+        gpt.model = "fixture"
+        gpt_create = unittest.mock.Mock(return_value=SimpleNamespace(output_text=json.dumps(brief)))
+        gpt.client = SimpleNamespace(responses=SimpleNamespace(create=gpt_create))
+        self.assertEqual(gpt.draft_test_brief({"selected_asset": {"path": "/search"}}), brief)
+        self.assertEqual(gpt_create.call_args.kwargs["text"]["format"]["name"],
+                         "generated_test_brief")
+        self.assertFalse(gpt_create.call_args.kwargs["store"])
+
+        class Stream:
+            def __enter__(self):
+                return iter([SimpleNamespace(type="response.output_text.delta",
+                                             delta=json.dumps(brief)),
+                             SimpleNamespace(type="response.completed")])
+
+            def __exit__(self, *_args):
+                pass
+
+        plus = ai_review.ChatGPTPlanner.__new__(ai_review.ChatGPTPlanner)
+        plus.model = "fixture"
+        plus.session = SimpleNamespace(access_token=lambda: "fixture-token")
+        plus_create = unittest.mock.Mock(return_value=Stream())
+        plus.OpenAI = lambda **_kwargs: SimpleNamespace(
+            responses=SimpleNamespace(create=plus_create))
+        self.assertEqual(plus.draft_test_brief({"selected_asset": {"path": "/search"}}), brief)
+        self.assertTrue(plus_create.call_args.kwargs["stream"])
+        self.assertFalse(plus_create.call_args.kwargs["store"])
 
     @patch("ai_review.socket.getaddrinfo", return_value=[(None, None, None, None, ("93.184.216.34", 443))])
     def test_unapproved_fields_methods_and_external_values_do_not_send(self, dns):
