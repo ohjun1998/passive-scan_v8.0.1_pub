@@ -97,7 +97,7 @@ def run_lab(output, auth="mock", model=None, reasoning_effort=None,
         raise RuntimeError("Real Plus model did not run the scoped Worker investigation")
     if auth == "mock":
         assert mock.calls == ["next_review_intent", "generated_test_brief",
-                              "worker_step", "worker_step", "worker_step",
+                              "worker_step", "worker_step",
                               "next_review_intent"], mock.calls
         assert summary["requests"] == 2, summary
         row = rows[0]
@@ -107,7 +107,7 @@ def run_lab(output, auth="mock", model=None, reasoning_effort=None,
         assert all(item["status"] == 200 and OWNED_NOTE_MARKER in item["preview"]
                    for item in row["observations"]), row
         assert row["worker_leads"][0]["evidence_ids"] == ["obs-1", "obs-2"], row
-        assert row["worker_leads"][0]["confidence"] == "inferred", row
+        assert row["worker_leads"][0]["confidence"] == "observed", row
         assert row["findings"] == [], row
     print(json.dumps({"mode": auth, "requests": summary["requests"],
                       "state": rows[0]["state"],

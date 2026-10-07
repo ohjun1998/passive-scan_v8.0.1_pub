@@ -18,9 +18,6 @@ on:
         description: 'Exercise live token renewal using the restored encrypted session'
         type: boolean
         default: false
-  push:
-    branches: [main]
-    paths: [.github/workflows/chatgpt_plus_lab.yml]
 permissions:
   contents: read
   actions: write
@@ -29,10 +26,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   lab:
-    if: >-
-      github.ref == 'refs/heads/main' && github.actor == 'ohjun1998' &&
-      (github.event_name == 'workflow_dispatch' ||
-       startsWith(github.event.head_commit.message, 'Run Plus vulnerable lab once'))
+    if: github.ref == 'refs/heads/main' && github.actor == 'ohjun1998'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -79,11 +73,10 @@ jobs:
           python tests/lab_web_flow.py --output "$RUNNER_TEMP/web-lab-fixed.jsonl"
           python tests/lab_web_flow.py --chatgpt --output "$RUNNER_TEMP/web-lab-plus.jsonl"
       - name: Test vulnerable note with ChatGPT Plus
-        if: inputs.vulnerable_worker || github.event_name == 'push'
-        # This one-time push supplies explicit ownership of synthetic test data.
+        if: inputs.vulnerable_worker
         run: python tests/lab_vulnerable_worker.py --auth chatgpt --reasoning-effort low --require-investigation --output "$RUNNER_TEMP/vulnerable-worker-plus.jsonl"
       - uses: actions/upload-artifact@v4
-        if: always() && (inputs.vulnerable_worker || github.event_name == 'push')
+        if: always() && inputs.vulnerable_worker
         with:
           name: vulnerable-worker-plus-results
           path: ${{ runner.temp }}/vulnerable-worker-plus.jsonl

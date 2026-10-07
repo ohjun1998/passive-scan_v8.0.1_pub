@@ -119,6 +119,31 @@ def execute_step(client, url, capability, step):
         return observation, raw
 
 
+def owned_access_candidate(observations, expectation):
+    """Confirm a cross-account response contains the configured own-test marker."""
+    owner = expectation.get("owner")
+    marker = expectation.get("private_marker")
+    if (owner not in ("a", "b") or not isinstance(marker, str) or not marker
+            or expectation.get("other_account_must_be_denied") is not True):
+        return None
+    other = "b" if owner == "a" else "a"
+    pairs = [(f"obs-{index}", obs) for index, obs in enumerate(observations, 1)
+             if obs.get("action") == "worker_get" and obs.get("status") == 200
+             and not obs.get("body_truncated") and obs.get("owned_marker_present")]
+    for owner_id, baseline in pairs:
+        if baseline.get("identity") != owner:
+            continue
+        for other_id, comparison in pairs:
+            if (comparison.get("identity") == other
+                    and comparison.get("request_fields") == baseline.get("request_fields")
+                    and comparison.get("body_sha256") == baseline.get("body_sha256")):
+                return {"kind": "access_control", "status": "manual_review",
+                        "confidence": "observed", "reason":
+                        "Another test identity received the same owned-object marker and response; verify access policy.",
+                        "evidence_ids": [owner_id, other_id]}
+    return None
+
+
 def run_worker(config, url, report, planner, client, direction="", planner_context=None):
     """Iterate model-proposed steps, stopping on the same global HTTP budget."""
     cap = capabilities(config, url)
@@ -156,6 +181,8 @@ def run_worker(config, url, report, planner, client, direction="", planner_conte
         history = [
             {"evidence_id": f"obs-{index}", "action": obs["action"],
              "status": obs["status"], "content_type": obs.get("content_type", ""),
+             "identity": obs.get("identity", "anonymous"),
+             "request_fields": obs.get("request_fields", []),
              "body_sha256": obs.get("body_sha256", ""),
              "preview": obs.get("preview", "")[:500]}
             for index, obs in enumerate(report["observations"], 1)]
@@ -187,10 +214,18 @@ def run_worker(config, url, report, planner, client, direction="", planner_conte
                                 "expected": str(proposal.get("expected", ""))[:300],
                                 "confidence": "inferred", "worker_step": step_number})
         observation, raw = execute_step(client, url, cap, proposal)
+        marker = expectation.get("private_marker")
+        observation["owned_marker_present"] = bool(
+            isinstance(marker, str) and marker and marker.encode() in raw)
         # Redact before sending observations back to the model or storing them.
         from ai_review import sanitize
         observation["preview"] = sanitize(observation["preview"])
         report["observations"].append(observation)
+        candidate = owned_access_candidate(report["observations"], expectation)
+        if candidate:
+            report.setdefault("worker_leads", []).append(candidate)
+            stop_reason = "owned_marker_exposure"
+            break
         if status := observation["status"]:
             if status == 429 or status >= 500:
                 stop_reason = "halted_on_server_signal"
