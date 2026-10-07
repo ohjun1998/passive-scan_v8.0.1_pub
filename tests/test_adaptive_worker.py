@@ -146,6 +146,8 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(plus.draft_test_brief({"selected_asset": {"path": "/search"}}), brief)
         self.assertEqual(plus_create.call_args.kwargs["reasoning"], {"effort": "low"})
         self.assertEqual(plus_create.call_args.kwargs["max_output_tokens"], 1200)
+        self.assertEqual(plus_create.call_args.kwargs["text"]["format"]["name"],
+                         "generated_test_brief")
 
     @patch("ai_review.socket.getaddrinfo", return_value=[(None, None, None, None, ("93.184.216.34", 443))])
     def test_unapproved_fields_methods_and_external_values_do_not_send(self, dns):
