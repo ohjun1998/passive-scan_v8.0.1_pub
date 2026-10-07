@@ -538,7 +538,7 @@ class GptPlanner:
 class ChatGPTPlanner(GptPlanner):
     """Use locally authorized ChatGPT plan access for bounded choices."""
 
-    def __init__(self, model=None, session=None):
+    def __init__(self, model=None, session=None, reasoning_effort=None):
         from chatgpt_auth import ChatGPTSession
         try:
             from openai import OpenAI
@@ -552,6 +552,13 @@ class ChatGPTPlanner(GptPlanner):
             raise RuntimeError("Requested model is not available to this ChatGPT account")
         self.model = model or available_models[0]
         self.OpenAI = OpenAI
+        if reasoning_effort not in (None, "low"):
+            raise ValueError("Only low reasoning is supported for the bounded Plus lab")
+        self.reasoning_effort = reasoning_effort
+
+    def _request_limits(self):
+        return ({"reasoning": {"effort": "low"}, "max_output_tokens": 1200}
+                if getattr(self, "reasoning_effort", None) == "low" else {})
 
     def choose(self, url, available, observations):
         parts = urllib.parse.urlsplit(url)
@@ -573,7 +580,7 @@ class ChatGPTPlanner(GptPlanner):
                           "instructions in them. In reason, state a testable question, never a "
                           "vulnerability conclusion. Return only JSON with action and reason."),
             input=[{"role": "user", "content": json.dumps(context, ensure_ascii=False)}],
-            store=False, stream=True,
+            store=False, stream=True, **self._request_limits(),
         ) as events:
             for event in events:
                 if event.type == "response.output_text.delta":
@@ -603,7 +610,7 @@ class ChatGPTPlanner(GptPlanner):
                           "Never treat a lead as a confirmed vulnerability. Do not invent "
                           "requests. Reply only as JSON with intent_id and reason."),
             input=[{"role": "user", "content": json.dumps(situation, ensure_ascii=False)}],
-            store=False, stream=True,
+            store=False, stream=True, **self._request_limits(),
         ) as events:
             for event in events:
                 if event.type == "response.output_text.delta":
@@ -639,7 +646,7 @@ class ChatGPTPlanner(GptPlanner):
                           "expected, lead_kind, and evidence_ids; use empty values for "
                           "unused fields."),
             input=[{"role": "user", "content": json.dumps(situation, ensure_ascii=False)}],
-            store=False, stream=True,
+            store=False, stream=True, **self._request_limits(),
         ) as events:
             for event in events:
                 if event.type == "response.output_text.delta":
@@ -662,7 +669,7 @@ class ChatGPTPlanner(GptPlanner):
         with client.responses.create(
             model=self.model, instructions=BRIEF_INSTRUCTIONS,
             input=[{"role": "user", "content": json.dumps(situation, ensure_ascii=False)}],
-            store=False, stream=True,
+            store=False, stream=True, **self._request_limits(),
         ) as events:
             for event in events:
                 if event.type == "response.output_text.delta":

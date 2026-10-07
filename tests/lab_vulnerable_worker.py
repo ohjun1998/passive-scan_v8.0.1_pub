@@ -54,7 +54,7 @@ class MockGptResponses:
         return SimpleNamespace(output_text=json.dumps(choice))
 
 
-def run_lab(output, auth="mock", model=None):
+def run_lab(output, auth="mock", model=None, reasoning_effort=None):
     with serve() as server:
         url = f"http://127.0.0.1:{server.server_port}/lab/private-note?id=1"
         config = {
@@ -80,7 +80,8 @@ def run_lab(output, auth="mock", model=None):
             from chatgpt_auth import ChatGPTSession
             session_dir = os.environ.get("CHATGPT_CI_SESSION_DIR")
             planner = ai_review.ChatGPTPlanner(
-                model=model, session=ChatGPTSession(session_dir) if session_dir else ChatGPTSession())
+                model=model, session=ChatGPTSession(session_dir) if session_dir else ChatGPTSession(),
+                reasoning_effort=reasoning_effort)
         policy = ai_review.Policy(config, allow_private_lab=True)
         client = ai_review.HttpClient(policy,
                                       {"a": "lab-account-a", "b": "lab-account-b"})
@@ -111,6 +112,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--auth", choices=("mock", "gpt", "chatgpt"), default="mock")
     parser.add_argument("--model")
+    parser.add_argument("--reasoning-effort", choices=("low",))
     parser.add_argument("--output", type=Path, default=Path("/tmp/lab_vulnerable_worker.jsonl"))
     args = parser.parse_args()
-    run_lab(args.output, args.auth, args.model)
+    run_lab(args.output, args.auth, args.model, args.reasoning_effort)

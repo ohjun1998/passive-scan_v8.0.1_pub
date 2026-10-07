@@ -186,7 +186,12 @@ This verifies the HTTP and report path, not real GPT reasoning quality.
 
 To try a real model against the same loopback fixture, set `OPENAI_API_KEY`
 in your local environment and add `--auth gpt --model YOUR_MODEL`, or use
-`--auth chatgpt` after local ChatGPT sign-in. Real model decisions can stop
+`--auth chatgpt --reasoning-effort low` after local ChatGPT sign-in. The low
+setting also caps each Plus response at 1,200 output tokens. The manual
+**ChatGPT Plus local lab** workflow runs this fixture by default using its
+protected renewable session and uploads `vulnerable-worker-plus-results` as
+JSONL; the other interactive lab is off by default to limit model calls.
+Real model decisions can stop
 early or choose different approved steps, so inspect the JSONL output for
 the generated brief, observations, and evidence IDs. The intentional flaw
 is a lab fixture; a Worker lead remains a manual-review inference.

@@ -9,6 +9,10 @@ on:
       interactive_site:
         description: 'Run the login, recovery, board and comment lab'
         type: boolean
+        default: false
+      vulnerable_worker:
+        description: 'Run the deliberately vulnerable note lab with real ChatGPT Plus (low reasoning)'
+        type: boolean
         default: true
       force_refresh:
         description: 'Exercise live token renewal using the restored encrypted session'
@@ -60,12 +64,24 @@ jobs:
               raise RuntimeError("Refresh token did not rotate")
           print("Live ChatGPT token renewal and rotation completed")
           PY
-      - run: python tests/lab_chatgpt_ci.py
+      - name: Exercise basic ChatGPT model check
+        if: inputs.interactive_site
+        run: python tests/lab_chatgpt_ci.py
       - name: Exercise interactive local web app
         if: inputs.interactive_site
         run: |
           python tests/lab_web_flow.py --output "$RUNNER_TEMP/web-lab-fixed.jsonl"
           python tests/lab_web_flow.py --chatgpt --output "$RUNNER_TEMP/web-lab-plus.jsonl"
+      - name: Test vulnerable note with ChatGPT Plus
+        if: inputs.vulnerable_worker
+        run: python tests/lab_vulnerable_worker.py --auth chatgpt --reasoning-effort low --output "$RUNNER_TEMP/vulnerable-worker-plus.jsonl"
+      - uses: actions/upload-artifact@v4
+        if: always() && inputs.vulnerable_worker
+        with:
+          name: vulnerable-worker-plus-results
+          path: ${{ runner.temp }}/vulnerable-worker-plus.jsonl
+          if-no-files-found: warn
+          retention-days: 7
       - name: Encrypt latest session for the next run
         if: always()
         env:
