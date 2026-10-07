@@ -103,6 +103,38 @@ class WorkerTests(unittest.TestCase):
         self.assertIn("Worker가 제안한 검토 후보", review_report.detail_section(row, 1, 1))
         self.assertIn("AI가 작성한 테스트 지시문", review_report.detail_section(row, 1, 1))
 
+    @patch("ai_review.socket.getaddrinfo", return_value=[(None, None, None, None, ("93.184.216.34", 443))])
+    @patch("ai_review.time.sleep")
+    def test_owned_fixture_is_passed_and_empty_lead_is_not_reported(self, pause, dns):
+        url = "https://example.test/search?id=1"
+        self.config["worker_capabilities"][url] = {
+            "methods": ["GET"], "query_keys": ["id"],
+            "identities": ["a", "b"], "max_steps": 2}
+        self.config["expectations"] = {url: {
+            "owner": "a", "other_account_must_be_denied": True}}
+
+        class CautiousPlanner(Planner):
+            def propose_step(self, situation):
+                self.worker_contexts.append(situation)
+                if len(self.worker_contexts) == 1:
+                    return {"kind": "request", "method": "GET", "identity": "a",
+                            "changes": [{"key": "id", "value": "1"}],
+                            "reason": "Owner baseline", "expected": "Own note"}
+                return {"kind": "stop", "lead_kind": "", "reason": "Insufficient evidence",
+                        "evidence_ids": ["obs-1"]}
+
+        planner = CautiousPlanner()
+        client = ai_review.HttpClient(ai_review.Policy(self.config), {"a": "fixture"}, Opener())
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory, "out.jsonl")
+            ai_review.run(self.config, [url], planner, client, output, live=True)
+            row = json.loads(output.read_text())
+        expected = {"id": "1", "owner_identity": "a",
+                    "other_account_must_be_denied": True}
+        self.assertEqual(planner.brief_context["owned_test_object"], expected)
+        self.assertEqual(planner.worker_contexts[0]["owned_test_object"], expected)
+        self.assertNotIn("worker_leads", row)
+
     def test_malformed_generated_brief_fails_closed(self):
         for brief in ({"hypothesis": "x"},
                       {"hypothesis": "x", "procedure": "", "decision_rule": "z"}):
