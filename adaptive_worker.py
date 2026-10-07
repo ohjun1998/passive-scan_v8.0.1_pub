@@ -125,6 +125,15 @@ def run_worker(config, url, report, planner, client, direction="", planner_conte
     if cap is None:
         raise ValueError("No worker capability for URL")
     parts = urllib.parse.urlsplit(url)
+    expectation = config.get("expectations", {}).get(url, {})
+    approved_object = {}
+    if (expectation.get("owner") in ("a", "b")
+            and expectation.get("other_account_must_be_denied") is True):
+        object_id = urllib.parse.parse_qs(parts.query).get("id", [])
+        if len(object_id) == 1 and object_id[0].isdigit():
+            approved_object = {"id": object_id[0],
+                               "owner_identity": expectation["owner"],
+                               "other_account_must_be_denied": True}
     brief_context = {
         "selected_asset": {"path": parts.path,
                            "query_keys": [key for key, _ in urllib.parse.parse_qsl(parts.query)],
@@ -132,6 +141,7 @@ def run_worker(config, url, report, planner, client, direction="", planner_conte
                            "test_candidates": report["test_candidates"]},
         "planner_direction": str(direction)[:300],
         "approved_capability": cap,
+        "owned_test_object": approved_object,
         "prior_facts": report["facts"][-20:],
         "prior_leads": (report["findings"] + report.get("worker_leads", []))[-20:],
         "shared_progress": planner_context or {},
@@ -152,6 +162,7 @@ def run_worker(config, url, report, planner, client, direction="", planner_conte
         parts = urllib.parse.urlsplit(url)
         situation = {"path": parts.path,
                      "query_keys": [key for key, _ in urllib.parse.parse_qsl(parts.query)],
+                     "owned_test_object": approved_object,
                      "generated_test_brief": brief,
                      "capability": cap, "observations": history,
                      "remaining_requests": client.policy.max_requests - client.policy.request_count}
@@ -161,7 +172,7 @@ def run_worker(config, url, report, planner, client, direction="", planner_conte
             ids = proposal.get("evidence_ids", [])
             if not isinstance(ids, list) or any(value not in valid for value in ids):
                 raise ValueError("Worker lead references unavailable evidence")
-            if ids:
+            if ids and str(proposal.get("lead_kind", "")).strip():
                 report.setdefault("worker_leads", []).append({
                     "kind": str(proposal.get("lead_kind", ""))[:80],
                     "status": "manual_review", "confidence": "inferred",
