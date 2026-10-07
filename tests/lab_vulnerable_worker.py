@@ -25,8 +25,9 @@ class MockGptResponses:
         context = json.loads(request["input"])
         self.calls.append(name)
         if name == "next_review_intent":
-            choice = {"intent_id": next(item["id"] for item in context["available_intents"]
-                                        if item["action"] == "investigate"),
+            investigate = next((item["id"] for item in context["available_intents"]
+                                if item["action"] == "investigate"), "stop")
+            choice = {"intent_id": investigate,
                       "reason": "Compare access to Alice's own note as Alice and Bob"}
         elif name == "generated_test_brief":
             assert context["approved_capability"]["identities"] == ["a", "b"]
@@ -54,7 +55,8 @@ class MockGptResponses:
         return SimpleNamespace(output_text=json.dumps(choice))
 
 
-def run_lab(output, auth="mock", model=None, reasoning_effort=None):
+def run_lab(output, auth="mock", model=None, reasoning_effort=None,
+            require_investigation=False):
     with serve() as server:
         url = f"http://127.0.0.1:{server.server_port}/lab/private-note?id=1"
         config = {
@@ -65,8 +67,8 @@ def run_lab(output, auth="mock", model=None, reasoning_effort=None):
                                           "query_keys": ["id"],
                                           "identities": ["a", "b"],
                                           "max_steps": 3}},
-            "max_urls": 1, "max_http_requests": 3,
-            "max_planning_steps": 1, "min_seconds_per_host": 1,
+            "max_urls": 1, "max_http_requests": 4,
+            "max_planning_steps": 2, "min_seconds_per_host": 1,
         }
         mock = None
         if auth == "mock":
@@ -87,9 +89,13 @@ def run_lab(output, auth="mock", model=None, reasoning_effort=None):
                                       {"a": "lab-account-a", "b": "lab-account-b"})
         summary = ai_review.run(config, [url], planner, client, output, live=True)
     rows = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
+    if require_investigation and (not rows[0].get("test_brief") or not any(
+            item["action"].startswith("worker_") for item in rows[0]["observations"])):
+        raise RuntimeError("Real Plus model did not run the scoped Worker investigation")
     if auth == "mock":
         assert mock.calls == ["next_review_intent", "generated_test_brief",
-                              "worker_step", "worker_step", "worker_step"], mock.calls
+                              "worker_step", "worker_step", "worker_step",
+                              "next_review_intent"], mock.calls
         assert summary["requests"] == 2, summary
         row = rows[0]
         assert row["state"] == "completed", row
@@ -113,6 +119,8 @@ if __name__ == "__main__":
     parser.add_argument("--auth", choices=("mock", "gpt", "chatgpt"), default="mock")
     parser.add_argument("--model")
     parser.add_argument("--reasoning-effort", choices=("low",))
+    parser.add_argument("--require-investigation", action="store_true")
     parser.add_argument("--output", type=Path, default=Path("/tmp/lab_vulnerable_worker.jsonl"))
     args = parser.parse_args()
-    run_lab(args.output, args.auth, args.model, args.reasoning_effort)
+    run_lab(args.output, args.auth, args.model, args.reasoning_effort,
+            args.require_investigation)
