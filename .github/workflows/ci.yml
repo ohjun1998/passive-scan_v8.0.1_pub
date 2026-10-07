@@ -17,6 +17,8 @@ jobs:
       - run: python -m unittest discover -s tests -v
       - run: python tests/lab_demo.py --output /tmp/lab_review_results.jsonl
       - run: python tests/lab_chatgpt_mock.py
+      - run: python -m pip install playwright && python -m playwright install --with-deps chromium
+      - run: python tests/lab_browser_xss.py
       - run: python tests/lab_web_flow.py --output /tmp/lab_web_results.jsonl
       - run: python tests/lab_web_flow.py --followup --output /tmp/lab_web_followup.jsonl
       - run: python -m py_compile js_assets.py global_mixer.py safe_probe.py txt_to_excel.py review.py

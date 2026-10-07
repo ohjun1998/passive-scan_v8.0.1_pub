@@ -23,16 +23,19 @@ only on targets where program rules explicitly allow the selected traffic.
    automatically submitted report.
 
 The default checks are exact-URL anonymous/own-test-account GETs and a
-harmless unique reflection marker. A configured live run can additionally
-perform one SQL error signal check on an existing query parameter or send one
-plain-text upload to an exact URL. Neither observation proves a vulnerability.
-It does **not** infer an API's POST body from a URL, execute scripts, perform
-data extraction, or test SSRF and financial actions.
+harmless unique reflection marker. Explicitly configured checks can compare
+owned download files across identities, test whether a fixed XSS canary
+executes when a captured HTML response is rendered in isolated Chromium,
+read back a harmless text upload from an exact URL, and compare repeated
+read-only SQL true/false conditions against an owned marker. These provide
+stronger observations for specific flows; no universal vulnerability proof
+is possible from URLs alone. The system does not infer POST schemas, execute
+arbitrary scripts, extract database data, or test SSRF and financial actions.
 
 ## Adaptive test selection from the URL list
 
-Each candidate report includes `test_candidates`: authorization, reflection,
-SQL error signal, and upload hypotheses inferred from path and query-key
+Each candidate report includes `test_candidates`: authorization, download,
+reflection, browser canary, SQL comparison, and upload hypotheses inferred from path and query-key
 features. The report distinguishes a ready test definition from one needing
 additional configuration. **A URL label is a lead, not evidence.** The model
 sees the available actions and actual observations, then chooses one action
@@ -46,14 +49,24 @@ only anonymous baseline GETs. For example:
 
 ```json
 {
-  "enabled_test_kinds": ["access_control", "reflection", "sql_error", "upload"],
+  "enabled_test_kinds": ["access_control", "download_access", "reflection",
+                         "xss_browser", "sql_error", "sql_boolean", "upload", "upload_verify"],
   "active_tests": {
     "https://example.test/search?q=shoes": {
-      "sql_error": {"parameter": "q", "identity": "anonymous"}
+      "xss_browser": {"parameter": "q"}
+    },
+    "https://example.test/items?id=123": {
+      "sql_boolean": {"parameter": "id"}
     },
     "https://example.test/upload": {
-      "upload": {"field": "file", "identity": "a"}
+      "upload": {"field": "file", "identity": "a",
+                 "verify_url": "https://example.test/files/owned-test.txt",
+                 "verify_identity": "b"}
     }
+  },
+  "expectations": {
+    "https://example.test/items?id=123": {"sql_marker": "OWNED_TEST_MARKER"},
+    "https://example.test/upload": {"uploaded_file_must_be_private": true}
   }
 }
 ```
@@ -62,12 +75,29 @@ Merge these keys into the normal config along with exact `allowed_hosts`,
 `live_path_prefixes`, and request limits. A SQL probe requires a healthy
 anonymous baseline, then appends a single apostrophe to a named, existing
 query parameter. It records the HTTP response for human comparison; no
-SQL injection finding is generated. The upload action sends one generated
+SQL injection finding is generated. `sql_boolean` requires one numeric
+parameter, a healthy anonymous baseline containing `sql_marker`, and
+four remaining requests. It compares fixed true/false conditions twice.
+A stable marker difference becomes `manual_review`, not a confirmed SQLi.
+The upload action sends one generated
 `.txt` file with a harmless marker to the exact configured URL and field.
 Only the configured test identity can be used, with a token supplied through
-the existing credential environment mapping. It neither fetches the uploaded
-file nor treats an accepted upload as a vulnerability. A different form
-schema or upload destination needs an explicit test definition.
+the existing credential environment mapping. If `upload_verify` is enabled,
+it fetches only `verify_url` and checks the generated marker. A different
+identity reading a file configured as private becomes `manual_review`.
+Accepted uploads alone are not reported. A different form schema or upload
+destination needs an explicit test definition.
+
+For a download URL, set the existing `expectations` fields `owner`,
+`private_marker`, and `other_account_must_be_denied` for a file you own.
+The owner baseline and the other account's response must both contain
+the marker for a `download_access` review candidate. A truncated response
+cannot establish a negative result. The `xss_browser` action requires a
+reflected marker in an HTML response first, then submits a fixed canary
+through the configured existing search parameter. Chromium renders only
+the captured response at its origin; other browser HTTP and WebSocket
+requests are blocked. Execution is a manual-review candidate. A missing
+execution signal does not prove the absence of XSS.
 
 Global planning is on by default for a live run. It sees a compact asset
 inventory of the URLs selected from reconnaissance, the last 100 observed
