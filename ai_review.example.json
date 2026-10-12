@@ -1,5 +1,4 @@
 {
-  "model": "gpt-5.4",
   "allowed_hosts": ["example.test"],
   "live_path_prefixes": ["/api/orders/", "/search"],
   "max_urls": 10,

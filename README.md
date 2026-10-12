@@ -11,7 +11,6 @@ Repository Settings → Secrets and variables → Actions에 값을 설정합니
 | `TARGET_DOMAINS` | 줄 단위 대상 호스트. `example.com` 또는 `*.example.com` |
 | `ACTIONS_CRYPTO_PASSWORD` | 결과 압축 파일의 암호 |
 | `DISCORD_WEBHOOK_URL` | 완료 알림용. 사용하지 않으면 비워둠 |
-| `GEMINI_API_KEY` | 선택적 AI 우선순위 분석용. 사용하지 않으면 비워둠 |
 
 Actions → **Automated Parallel Passive Reconnaissance** → **Run workflow**에서 모드를 선택합니다.
 
@@ -33,8 +32,9 @@ Actions → **Automated Parallel Passive Reconnaissance** → **Run workflow**�
 - 이전 SQLite의 URL을 복원하고 현재 대상 범위에 맞는 URL만 다시 검사합니다.
 - `full`에서는 JS URL의 쿼리를 보존해 파일을 다시 다운로드하고 분석합니다. 각 대상 묶음당 최대 1000개입니다. TruffleHog 비밀값 원문은 보고서에 넣지 않습니다.
 - 응답 결과가 없는 URL은 `NotProbed`, 검사 결과에 상태 코드가 없는 경우는 `ProbeError`로 표시합니다. 지난 실행과 HTTP 상태가 다르면 Status Changes 시트에 기록합니다.
-- Gemini를 선택해 사용할 때 URL 전체 대신 불투명 ID, 경로 패턴, 쿼리 **키 이름**만 보냅니다. 점수는 취약점 확률이 아니라 수동 점검 우선순위입니다.
 - Review Queue 시트가 SQLite의 수동 검토 상태를 표시합니다. 결과의 Postman GET은 URL만으로 추정한 것이므로 실제 요청 메서드와 인증 조건을 확인하세요.
+
+Gemini·OpenAI API 키 연동은 제거되었습니다. 선택형 ChatGPT 로그인 기반 검토는 [AI_REVIEW_README.md](AI_REVIEW_README.md)를 참고하세요.
 
 ## 수동 검토 상태
 
@@ -54,7 +54,7 @@ python -m py_compile js_assets.py global_mixer.py safe_probe.py txt_to_excel.py 
 bash -n collect_urls.sh scan_linkfinder.sh scan_trufflehog.sh
 ```
 
-테스트는 로컬 파일과 모의 응답만 사용합니다. 전체 GitHub Actions 실행, 외부 도구 설치, 실제 대상 및 Gemini 분석은 여기서 검증하지 않았습니다.
+테스트는 로컬 파일과 모의 응답만 사용합니다. 전체 GitHub Actions 실행, 외부 도구 설치, 실제 대상 검사은 여기서 검증하지 않았습니다.
 
 ## 운영 시 한계
 

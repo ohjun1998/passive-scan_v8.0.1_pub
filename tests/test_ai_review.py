@@ -171,24 +171,42 @@ class AiReviewTests(unittest.TestCase):
             ai_review.Policy({"allowed_hosts": ["127.0.0.1"]}).validate(
                 "http://127.0.0.1:18080/api/orders/123")
 
-    def test_gpt_planner_only_accepts_preapproved_actions(self):
-        fake_create = Mock(return_value=SimpleNamespace(output_text='{"action":"b","reason":"test"}'))
-        fake_openai = SimpleNamespace(OpenAI=lambda: SimpleNamespace(
-            responses=SimpleNamespace(create=fake_create)))
-        with patch.dict("sys.modules", {"openai": fake_openai}):
-            planner = ai_review.GptPlanner("test-model")
-            result = planner.choose("https://example.test/search?q=private-value", ["anonymous"], [])
+    def test_chatgpt_planner_only_accepts_preapproved_actions(self):
+        class Stream:
+            def __enter__(self):
+                return iter([SimpleNamespace(type="response.output_text.delta",
+                                             delta='{"action":"b","reason":"test"}'),
+                             SimpleNamespace(type="response.completed")])
+
+            def __exit__(self, *_args):
+                pass
+
+        fake_create = Mock(return_value=Stream())
+        planner = ai_review.ChatGPTPlanner.__new__(ai_review.ChatGPTPlanner)
+        planner.model = "test-model"
+        planner.session = SimpleNamespace(access_token=lambda: "fixture-session-token")
+        planner.OpenAI = lambda **_kwargs: SimpleNamespace(
+            responses=SimpleNamespace(create=fake_create))
+        result = planner.choose("https://example.test/search?q=private-value", ["anonymous"], [])
         self.assertEqual(result["action"], "stop")
         arguments = fake_create.call_args.kwargs
-        self.assertNotIn("private-value", arguments["input"])
+        self.assertNotIn("private-value", arguments["input"][0]["content"])
         self.assertFalse(arguments["store"])
+        self.assertTrue(arguments["stream"])
+
+    def test_removed_api_key_auth_is_rejected(self):
+        with patch("sys.argv", ["ai_review.py", "--config", "unused.json",
+                                "--auth", "api-key"]), patch("sys.stderr"):
+            with self.assertRaises(SystemExit) as raised:
+                ai_review.main()
+        self.assertEqual(raised.exception.code, 2)
 
     def test_live_chatgpt_uses_restored_ci_session_directory(self):
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory, "policy.json")
             config.write_text(json.dumps(self.config))
             with patch("sys.argv", ["ai_review.py", "--config", str(config),
-                                    "--auth", "chatgpt", "--live"]), \
+                                    "--live"]), \
                  patch.dict("os.environ", {"CHATGPT_CI_SESSION_DIR": directory}), \
                  patch("chatgpt_auth.ChatGPTSession") as session_class, \
                  patch("ai_review.ChatGPTPlanner") as planner_class, \

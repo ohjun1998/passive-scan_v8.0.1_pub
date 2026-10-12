@@ -16,14 +16,6 @@ on:
         required: true
         default: false
         type: boolean
-      auth:
-        description: 'Model authentication for live review'
-        required: true
-        default: api-key
-        type: choice
-        options:
-          - api-key
-          - chatgpt
   workflow_call:
     inputs:
       source_run_id:
@@ -32,9 +24,6 @@ on:
       live:
         required: true
         type: boolean
-      auth:
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -46,12 +35,12 @@ concurrency:
 
 jobs:
   review:
-    if: inputs.auth != 'chatgpt' || !inputs.live || (github.ref == 'refs/heads/main' && github.actor == 'ohjun1998')
+    if: ${{ !inputs.live || (github.ref == 'refs/heads/main' && github.actor == 'ohjun1998') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: Set runner session directory
-        if: inputs.live && inputs.auth == 'chatgpt'
+        if: inputs.live
         run: echo "CHATGPT_CI_SESSION_DIR=$RUNNER_TEMP/passive-scan-chatgpt" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -86,7 +75,7 @@ jobs:
           fi
       - name: Restore protected ChatGPT session
         id: restore_session
-        if: inputs.live && inputs.auth == 'chatgpt'
+        if: inputs.live
         env:
           GH_TOKEN: ${{ github.token }}
           CHATGPT_CI_BOOTSTRAP: ${{ secrets.CHATGPT_CI_BOOTSTRAP }}
@@ -94,16 +83,14 @@ jobs:
         run: python3 ci_session.py restore --directory "$CHATGPT_CI_SESSION_DIR"
       - name: GPT review or offline plan
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           REVIEW_ACCOUNT_A_TOKEN: ${{ secrets.REVIEW_ACCOUNT_A_TOKEN }}
           REVIEW_ACCOUNT_B_TOKEN: ${{ secrets.REVIEW_ACCOUNT_B_TOKEN }}
           LIVE_MODE: ${{ inputs.live }}
-          REVIEW_AUTH: ${{ inputs.auth }}
         run: |
           if [ "$LIVE_MODE" = true ]; then
-            python3 ai_review.py --config ai_review.config.json --db source_report/decrypted/recon_history.db --output ai_review_results.jsonl --auth "$REVIEW_AUTH" --live
+            python3 ai_review.py --config ai_review.config.json --db source_report/decrypted/recon_history.db --output ai_review_results.jsonl --live
           else
-            python3 ai_review.py --config ai_review.config.json --db source_report/decrypted/recon_history.db --output ai_review_results.jsonl --auth "$REVIEW_AUTH"
+            python3 ai_review.py --config ai_review.config.json --db source_report/decrypted/recon_history.db --output ai_review_results.jsonl
           fi
       - name: Encrypt latest ChatGPT session
         if: always() && steps.restore_session.outcome == 'success'
@@ -118,7 +105,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - name: Verify live Plus review completed
-        if: inputs.live && inputs.auth == 'chatgpt'
+        if: inputs.live
         run: |
           python3 - <<'PY'
           import json

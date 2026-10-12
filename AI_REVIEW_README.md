@@ -1,5 +1,12 @@
 # GPT-assisted bounded URL review
 
+## Model access
+
+Gemini ranking and OpenAI API-key access have been removed. Live model calls
+use only the locally authorized ChatGPT login session. The OpenAI Python
+package remains as the transport client for that session.
+
+
 `ai_review.py` is a separate, optional companion for Passive Scan v8.0.1. The
 existing 20-worker reconnaissance workflow remains unchanged. Run this tool
 only on targets where program rules explicitly allow the selected traffic.
@@ -189,8 +196,7 @@ same complete response, the report links those observations as an observed
 access-control candidate for manual review. An anonymous 401 alone is not
 a finding.
 
-To try a real model against the same loopback fixture, set `OPENAI_API_KEY`
-in your local environment and add `--auth gpt --model YOUR_MODEL`, or use
+To try a real model against the same loopback fixture, use
 `--auth chatgpt --reasoning-effort low` after local ChatGPT sign-in. The low
 setting also caps each Plus response at 1,200 output tokens. The manual
 **ChatGPT Plus local lab** workflow runs this fixture by default using its
@@ -265,15 +271,14 @@ and writes each observed result. Unlike the fixed lab planner, GPT can choose
 `stop` or other permitted actions, so the number of findings can vary. The
 default lab run without `--chatgpt` remains deterministic and offline.
 
-### API-key mode
+### Live review with ChatGPT login
 
-Install optional API dependency and set your OpenAI API key locally. If using
-two authorized test accounts, map environment variables in the JSON config;
+Install the optional ChatGPT client dependency and sign in locally as described
+above. If using two authorized test accounts, map environment variables in the JSON config;
 tokens are read on the test runner and are never included in model input.
 
 ```bash
 python3 -m pip install openai
-export OPENAI_API_KEY='your_api_key'
 export REVIEW_ACCOUNT_A_TOKEN='your_owned_test_account_a_token'
 export REVIEW_ACCOUNT_B_TOKEN='your_owned_test_account_b_token'
 python3 ai_review.py --config ai_review.config.json \
@@ -338,11 +343,10 @@ Set `AI_REVIEW_CONFIG_JSON` to an edited JSON policy with exact
 `allowed_hosts` and nonempty `live_path_prefixes`. Set
 `ACTIONS_CRYPTO_PASSWORD` to the password protecting the recon report. Add
 own test-account token secrets only if their checks are explicitly approved.
-For API-key live mode, also set `OPENAI_API_KEY`.
 
 The manual **Bounded GPT review of a passive recon run** workflow takes a
-completed recon run ID, defaults to offline planning, and offers `api-key` or
-`chatgpt` authentication. `chatgpt` live review uses the encrypted session
+completed recon run ID and defaults to offline planning. Live review uses
+ChatGPT login only, with the encrypted session
 checkpoint established by the separate Plus lab. It restores the latest
 checkpoint, selects permitted model actions, then saves a newly encrypted
 checkpoint even if review fails after restoration. Both workflows serialize
@@ -398,7 +402,7 @@ through the normal reviewer, checks the resulting manual-review candidates,
 and shuts the site down. It models an account B reading account A's own test
 order and a search term echoed in JSON. The latter is **not** XSS.
 
-The lab uses a fixed decision planner in place of the OpenAI API, so it
+The lab uses a fixed decision planner in place of a live ChatGPT model, so it
 tests the HTTP, policy and result path but does not validate GPT connectivity
 or model decisions. No GitHub Actions secrets are needed for this local test.
 

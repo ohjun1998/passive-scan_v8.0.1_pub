@@ -8,9 +8,7 @@ import sqlite3
 import shutil
 import asyncio
 import aiohttp
-import requests
 import time
-import hashlib
 from datetime import datetime
 from urllib.parse import urlparse, parse_qsl
 from openpyxl import Workbook
@@ -27,13 +25,6 @@ except ImportError:
 def escape_formula(value):
     if isinstance(value, str) and value.startswith(('=', '+', '-', '@')): return "'" + value
     return value
-
-def ai_feature(url):
-    parsed = urlparse(url)
-    path = normalize_dynamic_path(parsed.path)
-    path = re.sub(r'[a-zA-Z0-9_-]{24,}', '{value}', path)
-    return {"id": hashlib.sha256(url.encode()).hexdigest(), "path": path,
-            "query_keys": sorted(set(k for k, _ in parse_qsl(parsed.query, keep_blank_values=True)))}
 
 def probe_state(url, statuses, unsafe_words, static_extensions):
     if any(word in url.lower() for word in unsafe_words):
@@ -121,72 +112,6 @@ regex_sensitive_exts = re.compile(r'\.(env|bak|swp|old|sql|sqlite|db|dump|log|co
 regex_sensitive_paths = re.compile(r'/(admin|administrator|wp-admin|manage|phpmyadmin|server-status|server-info|actuator|swagger-ui|graphql)($|/)', re.IGNORECASE)
 regex_credential_params = re.compile(r'(?:\?|&)(api_?key|token|jwt|auth|secret|password|pwd|access_?token)=([a-zA-Z0-9\-_\.]{8,})', re.IGNORECASE)
 regex_infra_paths = re.compile(r'/\.(git|svn|hg|aws|ssh|docker)($|/)', re.IGNORECASE)
-
-def get_best_gemini_model(api_key):
-    print("[*] 현재 API 키로 사용 가능한 최적의 Gemini AI 모델을 동적으로 탐색합니다...", flush=True)
-    try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
-        res = requests.get(url, timeout=15)
-        if res.status_code == 200:
-            models = res.json().get('models', [])
-            valid_models = [m['name'] for m in models if 'generateContent' in m.get('supportedGenerationMethods', [])]
-
-            priorities = ['models/gemini-1.5-flash-latest', 'models/gemini-2.5-flash', 'models/gemini-1.5-flash', 'models/gemini-pro']
-            for p in priorities:
-                if p in valid_models:
-                    selected = p.replace('models/', '')
-                    print(f"[+] API 승인 확인! 타격 모델 설정 완료: {selected}", flush=True)
-                    return selected
-            if valid_models: return valid_models[0].replace('models/', '')
-    except Exception as e:
-        print(f"[-] 모델 동적 탐색 실패: {e}")
-    return "gemini-1.5-flash"
-
-async def ask_gemini_async(session, gemini_key, batch, model_name):
-    prompt = (
-        "You are an elite Bug Bounty Hunter and Red Teamer. Analyze the following list of URLs discovered during passive reconnaissance.\n"
-        "Rank manual review priority (0 to 100) using only path patterns and query key names. Never claim a vulnerability is confirmed.\n"
-        "Return EXACTLY a JSON array of objects. Do not include markdown formatting or backticks. Each object must contain these keys:\n"
-        "- 'id': the exact opaque id from the input\n"
-        "- 'priority': integer from 0 to 100\n"
-        "- 'vuln_type': string of suspected vulnerability type\n"
-        "- 'reason': short clear explanation in Korean of why this URL is high risk.\n\n"
-        f"Path features:\n{json.dumps(batch)}"
-    )
-    g_api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_key}"
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"responseMimeType": "application/json"}
-    }
-    timeout = aiohttp.ClientTimeout(total=150)
-    for attempt in range(3):
-        try:
-            async with session.post(g_api_url, json=payload, timeout=timeout) as res:
-                if res.status == 200:
-                    res_json = await res.json()
-                    raw_reply = res_json.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
-                    if not raw_reply: return []
-                    match = re.search(r'\[\s*\{.*?\}\s*\]', raw_reply, re.DOTALL)
-                    if match:
-                        try: return json.loads(match.group(0))
-                        except: pass
-                    try: return json.loads(raw_reply.strip())
-                    except: return []
-                elif res.status == 429: await asyncio.sleep(10); continue
-                else: return []
-        except: await asyncio.sleep(3); continue
-    return []
-
-async def process_all_gemini(gemini_key, candidate_urls, model_name):
-    ai_ranked_results = []
-    async with aiohttp.ClientSession() as session:
-        for i in range(0, len(candidate_urls), 10):
-            batch = candidate_urls[i:i+10]
-            print(f"[*] Gemini AI 지능형 분석 진행 중... ({i+1} ~ {min(i+10, len(candidate_urls))} / {len(candidate_urls)})")
-            res_list = await ask_gemini_async(session, gemini_key, batch, model_name)
-            if isinstance(res_list, list): ai_ranked_results.extend(res_list)
-            if i + 10 < len(candidate_urls): await asyncio.sleep(3)
-    return ai_ranked_results
 
 async def fetch_wayback_first_seen(session, subdomain):
     url = f"https://web.archive.org/cdx/search/cdx?url={subdomain}/*&limit=1&fl=timestamp&output=json"
@@ -427,28 +352,6 @@ def build_advanced_excel_report():
 
     dork_results = run_duckduckgo_dorking(targets)
 
-    gemini_key = os.environ.get('GEMINI_API_KEY')
-    ai_ranked_results = []
-
-    if gemini_key:
-        candidate_urls = []
-        for url_map in matrix_data.values():
-            for url, data in url_map.items():
-                sc = str(status_codes.get(url, 'NotProbed'))
-                if sc in ['200', '301', '302', '401', '403', '500'] or '?' in url:
-                    candidate_urls.append(url)
-
-        candidate_urls = list(dict.fromkeys(candidate_urls))[:300]
-        if candidate_urls:
-            selected_model = get_best_gemini_model(gemini_key)
-            print(f"[+] 총 {len(candidate_urls)}개의 중요 엔드포인트를 식별하여 AI 추론을 요청합니다...", flush=True)
-            feature_map = {ai_feature(url)["id"]: url for url in candidate_urls}
-            ai_ranked_results = asyncio.run(process_all_gemini(gemini_key, [ai_feature(url) for url in candidate_urls], selected_model))
-            ai_ranked_results = [dict(row, url=feature_map[row["id"]]) for row in ai_ranked_results
-                                 if isinstance(row, dict) and row.get("id") in feature_map
-                                 and type(row.get("priority")) is int and 0 <= row["priority"] <= 100]
-            ai_ranked_results.sort(key=lambda x: x["priority"], reverse=True)
-
     now_str = datetime.now().strftime("%Y%m%d_%H%M")
 
     postman_collection = {
@@ -681,33 +584,6 @@ def build_advanced_excel_report():
         subdomain_analysis_results = asyncio.run(analyze_all_subdomains(list(global_current_subdomains)))
 
     # =========================================================================
-    # 2. 🔮 Gemini AI Ranking 시트 생성 (가독성 순서 개선)
-    # =========================================================================
-    if ai_ranked_results:
-        ws_ai = wb.create_sheet(title="🔮 Gemini AI Ranking")
-        ai_headers = ["No", "🔮 수동 점검 우선순위", "📡 응답 상태", "🎯 타겟 URL", "⚠️ 검토 유형", "💡 Gemini AI 분석 가이드"]
-        ws_ai.append(ai_headers)
-        for c in range(1, 7):
-            ws_ai.cell(1, c).font = font_header
-            ws_ai.cell(1, c).fill = PatternFill(start_color='6F42C1', end_color='6F42C1', fill_type='solid')
-            ws_ai.cell(1, c).alignment = align_center; ws_ai.cell(1, c).border = thin_border
-
-        for idx, res in enumerate(ai_ranked_results, 1):
-            ai_url = res.get('url')
-            ai_status = str(status_codes.get(ai_url, 'NotProbed'))
-            ws_ai.append([idx, res["priority"], ai_status, escape_formula(ai_url), escape_formula(res.get('vuln_type')), escape_formula(res.get('reason'))])
-            for c in range(1, 7):
-                cell = ws_ai.cell(idx + 1, c)
-                cell.font = font_data; cell.border = thin_border
-                if (idx % 2) == 1: cell.fill = fill_zebra
-
-                if c == 3:
-                    cell.fill = PatternFill(start_color=get_status_color(ai_status), end_color=get_status_color(ai_status), fill_type='solid')
-                    cell.font = Font(name='Malgun Gothic', bold=True, color='FFFFFF'); cell.alignment = align_center
-                elif c in [4, 5, 6]: cell.alignment = align_left
-                else: cell.alignment = align_center
-
-    # =========================================================================
     # 3. 🚨 High Risk (고위험군) 시트 생성
     # =========================================================================
     high_risk_records.sort(key=lambda x: (not x["is_new"], x["priority"], x["raw_target"], x["url"]))
@@ -874,7 +750,7 @@ def build_advanced_excel_report():
             cell.font = Font(name='Malgun Gothic', size=11, bold=True, color='FFFFFF'); cell.fill = PatternFill(start_color='1F4E78', end_color='1F4E78', fill_type='solid')
             cell.border = thin_border; cell.alignment = align_center if c != 2 else align_left
 
-    sheet_order = ["Summary Dashboard", "🔄 Status Changes", "🔐 Secrets (검토)", "📝 Review Queue", "🔮 Gemini AI Ranking", "🚨 High Risk (고위험군)", "🌐 서브도메인 연혁(Wayback)", "🔍 OSINT Dorking"]
+    sheet_order = ["Summary Dashboard", "🔄 Status Changes", "🔐 Secrets (검토)", "📝 Review Queue", "🚨 High Risk (고위험군)", "🌐 서브도메인 연혁(Wayback)", "🔍 OSINT Dorking"]
     ordered_sheets = []
     for title in sheet_order:
         if title in wb.sheetnames:
@@ -904,14 +780,14 @@ def build_advanced_excel_report():
     # 열 너비(Width) 자동 맞춤 조정 (변경된 헤더명 기준 매핑)
     # =========================================================================
     for sheet in wb.worksheets:
-        header_row_val = 1 if sheet.title in ["Summary Dashboard", "🔄 Status Changes", "🔐 Secrets (검토)", "📝 Review Queue", "🚨 High Risk (고위험군)", "🔮 Gemini AI Ranking", "🌐 서브도메인 연혁(Wayback)", "🔍 OSINT Dorking"] else 2
+        header_row_val = 1 if sheet.title in ["Summary Dashboard", "🔄 Status Changes", "🔐 Secrets (검토)", "📝 Review Queue", "🚨 High Risk (고위험군)", "🌐 서브도메인 연혁(Wayback)", "🔍 OSINT Dorking"] else 2
         for col_idx, col in enumerate(sheet.columns, 1):
             col_letter = get_column_letter(col_idx)
             header = str(sheet.cell(header_row_val, col_idx).value or "")
 
             if header in ["🎯 타겟 절대 경로 (URL)", "🎯 고위험 경로 (Endpoint)", "🎯 타겟 URL", "🎯 발견된 인덱싱 URL", "⌨️ 사용된 Dork 쿼리"]: sheet.column_dimensions[col_letter].width = 80  
             elif header == "📜 발견된 JS 파일명": sheet.column_dimensions[col_letter].width = 50  
-            elif header in ["🚨 탐지 사유 / 위험도", "💡 Gemini AI 분석 가이드", "🌐 서브도메인 (Subdomain)"]: sheet.column_dimensions[col_letter].width = 55  
+            elif header in ["🚨 탐지 사유 / 위험도", "🌐 서브도메인 (Subdomain)"]: sheet.column_dimensions[col_letter].width = 55
             elif header in ["📊 누적 / 🔥 신규 URL", "jsluice (누적 / 신규)", "🌟 서브도메인 (누적/신규)", "📅 최초 발견일 (Wayback)", "🏢 타겟 도메인", "⚙️ 기능(Function)"]: sheet.column_dimensions[col_letter].width = 28
             elif header in ["🛠️ 기술 스택", "🌐 웹 서버", "기술 스택 탐지", "웹 서버 탐지", "📂 소스 출처"]: sheet.column_dimensions[col_letter].width = 25
             elif header in ["📡 응답 상태", "🔥 신규여부", "🌟 신규 서브", "🔮 잠재적 위험 확률 (%)", "🔍 OSINT Dorks", "🚩 고가치 타겟", "Katana 탐지", "🚨 위험도"]: sheet.column_dimensions[col_letter].width = 18
@@ -920,8 +796,6 @@ def build_advanced_excel_report():
             else: sheet.column_dimensions[col_letter].width = 18
 
     ws_dash.column_dimensions['B'].width = 35
-    if "🔮 Gemini AI Ranking" in wb.sheetnames: 
-        wb["🔮 Gemini AI Ranking"].column_dimensions['F'].width = 80 
 
     wb.save(f'reports/passive_recon_report_{now_str}.xlsx')
     with open(f'reports/postman_collection_{now_str}.json', 'w', encoding='utf-8') as f: json.dump(postman_collection, f, indent=4, ensure_ascii=False)
