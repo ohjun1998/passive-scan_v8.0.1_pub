@@ -13,16 +13,18 @@ import ai_review
 from web_lab_site import OWNED_NOTE_MARKER, serve
 
 
-class MockGptResponses:
-    """Reply through the real GptPlanner adapter without contacting OpenAI."""
+class MockChatGPTResponses:
+    """Reply through the ChatGPT streaming adapter without a model request."""
 
     def __init__(self):
         self.calls = []
 
     def create(self, **request):
-        assert request["store"] is False
-        name = request["text"]["format"]["name"]
-        context = json.loads(request["input"])
+        assert request["store"] is False and request["stream"] is True
+        context = json.loads(request["input"][0]["content"])
+        name = ("next_review_intent" if "available_intents" in context else
+                "generated_test_brief" if "approved_capability" in context else
+                "worker_step")
         self.calls.append(name)
         if name == "next_review_intent":
             investigate = next((item["id"] for item in context["available_intents"]
@@ -52,7 +54,16 @@ class MockGptResponses:
                           "evidence_ids": [item["evidence_id"] for item in observations]}
         else:
             raise AssertionError("Unexpected model call: " + name)
-        return SimpleNamespace(output_text=json.dumps(choice))
+        class Stream:
+            def __enter__(self):
+                return iter([SimpleNamespace(type="response.output_text.delta",
+                                             delta=json.dumps(choice)),
+                             SimpleNamespace(type="response.completed")])
+
+            def __exit__(self, *_args):
+                pass
+
+        return Stream()
 
 
 def run_lab(output, auth="mock", model=None, reasoning_effort=None,
@@ -75,12 +86,11 @@ def run_lab(output, auth="mock", model=None, reasoning_effort=None,
         }
         mock = None
         if auth == "mock":
-            mock = MockGptResponses()
-            planner = ai_review.GptPlanner.__new__(ai_review.GptPlanner)
+            mock = MockChatGPTResponses()
+            planner = ai_review.ChatGPTPlanner.__new__(ai_review.ChatGPTPlanner)
             planner.model = "local-fixture"
-            planner.client = SimpleNamespace(responses=mock)
-        elif auth == "gpt":
-            planner = ai_review.GptPlanner(model or config.get("model", "gpt-5.4"))
+            planner.session = SimpleNamespace(access_token=lambda: "local-fixture-token")
+            planner.OpenAI = lambda **_kwargs: SimpleNamespace(responses=mock)
         else:
             from chatgpt_auth import ChatGPTSession
             session_dir = os.environ.get("CHATGPT_CI_SESSION_DIR")
@@ -119,7 +129,7 @@ def run_lab(output, auth="mock", model=None, reasoning_effort=None,
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--auth", choices=("mock", "gpt", "chatgpt"), default="mock")
+    parser.add_argument("--auth", choices=("mock", "chatgpt"), default="mock")
     parser.add_argument("--model")
     parser.add_argument("--reasoning-effort", choices=("low",))
     parser.add_argument("--require-investigation", action="store_true")

@@ -161,19 +161,10 @@ class WorkerTests(unittest.TestCase):
         self.assertIsNone(adaptive_worker.owned_access_candidate(
             [a, {**b, "body_truncated": True}], expectation))
 
-    def test_gpt_and_chatgpt_brief_calls_use_fixed_instructions(self):
+    def test_chatgpt_brief_calls_use_fixed_instructions(self):
         brief = {"hypothesis": "Compare response behavior",
                  "procedure": "Try two approved q values",
                  "decision_rule": "Inspect the observed difference"}
-        gpt = ai_review.GptPlanner.__new__(ai_review.GptPlanner)
-        gpt.model = "fixture"
-        gpt_create = unittest.mock.Mock(return_value=SimpleNamespace(output_text=json.dumps(brief)))
-        gpt.client = SimpleNamespace(responses=SimpleNamespace(create=gpt_create))
-        self.assertEqual(gpt.draft_test_brief({"selected_asset": {"path": "/search"}}), brief)
-        self.assertEqual(gpt_create.call_args.kwargs["text"]["format"]["name"],
-                         "generated_test_brief")
-        self.assertFalse(gpt_create.call_args.kwargs["store"])
-
         class Stream:
             def __enter__(self):
                 return iter([SimpleNamespace(type="response.output_text.delta",

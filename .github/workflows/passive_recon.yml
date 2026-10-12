@@ -746,8 +746,6 @@ jobs:
     - run: cd previous_report && unzip -P "${{ secrets.ACTIONS_CRYPTO_PASSWORD }}" passive_recon_report_secured.zip || true
 
     - name: 지능형 컬러 엑셀 리포트 제작
-      env:
-        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       run: python -u txt_to_excel.py
 
     - name: 🗂️ 에러 로그 취합 및 최종 리포트 금고 봉인
@@ -783,5 +781,4 @@ jobs:
     with:
       source_run_id: ${{ github.run_id }}
       live: true
-      auth: chatgpt
     secrets: inherit
